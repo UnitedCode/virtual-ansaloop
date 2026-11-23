@@ -1,0 +1,13 @@
+[package]
+name = "virtual-ansaloop-web"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[lib]
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+virtual-ansaloop-engine = { path = "../engine" }
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-futures = "=0.4.77"
+js-sys = "=0.3.104"
+web-sys = { version = "=0.3.104", features = ["Window","Document","Element","Node","HtmlElement","HtmlAnchorElement","HtmlInputElement","CssStyleDeclaration","DomTokenList","Event","EventTarget","KeyboardEvent","PointerEvent","DomRect","HtmlSelectElement","DragEvent","DataTransfer","File","FileList","Blob","BlobPropertyBag","Url","Worker","WorkerOptions","WorkerType","WorkerGlobalScope","DedicatedWorkerGlobalScope","MessageEvent","MessagePort","MessageChannel","Performance","AudioContext","AudioBuffer","GainNode","AudioParam","BaseAudioContext","AudioWorklet","AudioWorkletNode","AudioWorkletNodeOptions","AudioNode","AudioDestinationNode","MediaStream","MediaStreamTrack","MediaStreamConstraints","MediaStreamAudioSourceNode","MediaDevices","Navigator","IdbFactory","IdbDatabase","IdbOpenDbRequest","IdbRequest","IdbTransaction","IdbTransactionMode","IdbObjectStore","DomException","console"] }

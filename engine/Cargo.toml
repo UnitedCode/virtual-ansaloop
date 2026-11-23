@@ -1,0 +1,11 @@
+[package]
+name = "virtual-ansaloop-engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ansaloop-sim = { git = "https://github.com/UnitedCode/ansaloop", rev = "069a2e72e807df66141a5c685009d4fd56985a1d" }
+virtual-daisy = { git = "https://github.com/UnitedCode/virtual-daisy", rev = "035c9d99291781496c4864e03386cee9648fa01c" }
+sha2 = "0.10.9"
+hound = "3.5"
