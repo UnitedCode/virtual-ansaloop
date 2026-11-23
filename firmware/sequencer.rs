@@ -1,5 +1,6 @@
 //! Fixed-memory, sample-clocked MIDI sequencer. No host clock or tape seeks.
 pub struct Sequencer {
+    pub digital_request: Option<(u8, u32)>,
     pub running: bool,
     pub step: u8,
     pub cursor: u8,
@@ -26,6 +27,7 @@ pub struct Sequencer {
 impl Sequencer {
     pub const fn new() -> Self {
         Self {
+            digital_request: None,
             running: false,
             step: 0,
             cursor: 0,
@@ -162,6 +164,16 @@ impl Sequencer {
         }
         let p = self.packet;
         match (p[1], self.len) {
+            (6, 3) if p[2] == 0 => self.digital_request = Some((6, 0)),
+            (7, 6) => {
+                self.digital_request = Some((
+                    7,
+                    u32::from(p[2])
+                        | (u32::from(p[3]) << 7)
+                        | (u32::from(p[4]) << 14)
+                        | (u32::from(p[5]) << 21),
+                ))
+            }
             (1, 4) => self.bpm = (u16::from(p[2]) | (u16::from(p[3]) << 7)).clamp(30, 240),
             (2, 6) if p[2] < 2 && p[3] < 16 => {
                 let t = p[2] as usize;

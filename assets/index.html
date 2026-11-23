@@ -38,7 +38,7 @@
         <input id="front-selector" class="front-selector" type="range" min="0" max="2" step="1" value="2" aria-label="Front selector: left tape, sequencer, right tape" title="Left tape / SEQ / Right tape — proposed assignment">
       </div>
       <input id="side-selector" class="hardware-selector side-selector" type="range" min="0" max="2" step="1" value="1" aria-label="Side three-position switch, unassigned" title="Side switch — three positions, unassigned">
-      <input id="side-binary" class="side-binary" type="checkbox" aria-label="Side two-position switch, unassigned" title="Side switch — two positions, unassigned">
+      <input id="side-binary" class="side-binary" type="checkbox" aria-label="Side switch: tape or digital looping" title="Tape / Digital — proposed assignment">
       <input id="volume" class="side-volume" type="range" min="0" max="1" step="0.01" value="0.75" aria-label="Speaker volume" title="Speaker volume">
       <button id="power-jack" class="rear-jack power-jack" aria-label="Power connection" title="Power connection" disabled></button>
       <button id="midi-jack" class="rear-jack midi-jack" aria-label="MIDI input, proposed connector" title="MIDI input — proposed connector"></button>
@@ -47,7 +47,7 @@
         <button id="record" aria-label="Record" aria-keyshortcuts="R" title="Record (R)" disabled>REC</button>
         <button id="play" aria-label="Play" aria-keyshortcuts="Space" title="Play / loop (Space)" disabled>PLAY</button>
         <button id="stop" aria-label="Stop" aria-keyshortcuts="S" title="Stop (S)" disabled>STOP</button>
-        <button id="sequence-cue" aria-label="CUE: next sequencer step" title="CUE: next step in SEQ mode" disabled>CUE</button>
+        <button id="sequence-cue" aria-label="CUE: next sequencer step or restart digital loop" title="CUE: next SEQ step / restart digital loop" disabled>CUE</button>
       </div></div>
       <details class="fit-details"><summary>LED module · 150 × 24 × 15 mm mounted</summary>
         <p>Raised above the lid: 144 × 18 × 1.6 mm PCB, 3 mm LEDs at 8 mm pitch, underside driver, two internal mounting screws and a six-wire connector. A 1 mm mounting pad is included in the displayed height.</p>
@@ -62,17 +62,23 @@
       <div class="readout"><span id="transport-led" class="led"></span><output id="transport-state" aria-live="polite">POWER OFF</output><output id="counter">00.00</output></div>
       <div class="level-track" title="Output level"><div id="output-level"></div></div>
       <p id="device-note" class="hint"></p>
-      <div class="deck-choice" role="group" aria-label="Select tape deck">
+      <div class="audio-mode" role="group" aria-label="Looping mode"><button id="tape-mode" aria-pressed="true">Tape loops</button><button id="digital-mode" aria-pressed="false">Digital loop</button></div>
+      <div id="deck-choice" class="deck-choice" role="group" aria-label="Select tape deck">
         <button id="deck-left" aria-pressed="false" disabled><strong>LEFT</strong><span id="deck-left-state">POWER OFF</span></button>
         <button id="deck-right" aria-pressed="true" disabled><strong>RIGHT</strong><span id="deck-right-state">POWER OFF</span></button>
       </div>
-      <div class="both-transport"><button id="play-both" disabled>Play both</button><button id="stop-both" disabled>Stop both</button></div>
+      <div id="both-transport" class="both-transport"><button id="play-both" disabled>Play both</button><button id="stop-both" disabled>Stop both</button></div>
       <p class="hint" id="selected-deck">Right deck</p>
+      <section id="digital-panel" hidden><h2>Digital loop <span id="digital-length">EMPTY</span></h2>
+        <div class="digital-progress"><div id="digital-progress-bar"></div></div>
+        <p class="hint">REC starts a new loop. PLAY closes it and loops. REC during playback toggles overdub. STOP keeps the loop; CUE restarts it. Up to 60 seconds.</p>
+        <button id="digital-clear" disabled>Clear stopped loop</button>
+      </section>
       <section id="sequencer-panel">
         <h2>Sequencer <span id="sequence-position">STOPPED</span></h2>
         <label class="seq-mode"><input id="sequence-mode" type="checkbox" disabled> SEQ controls</label>
         <p class="hint">In SEQ: CUE moves one step · REC toggles it · PLAY runs · STOP stops. LEFT / RIGHT selects the track.</p>
-        <div class="seq-settings"><label>BPM <input id="sequence-bpm" type="number" min="30" max="240" value="120" disabled></label><label>Output <select id="sequence-target" disabled><option value="0">MIDI notes</option><option value="1">Tape gates</option><option value="2">MIDI + tape gates</option></select></label></div>
+        <div class="seq-settings"><label>BPM <input id="sequence-bpm" type="number" min="30" max="240" value="120" disabled></label><label>Output <select id="sequence-target" disabled><option value="0">MIDI notes</option><option value="1">Loop gates</option><option value="2">MIDI + loop gates</option></select></label></div>
         <div id="step-editor" class="step-editor" role="group" aria-label="Sixteen step bench editor"></div>
         <div class="seq-settings"><label>Step <output id="sequence-cursor">1</output> · note <input id="sequence-note" aria-label="Selected step MIDI note" type="number" min="0" max="127" value="60" disabled></label><label><input id="sequence-enabled" type="checkbox" checked disabled> On</label></div>
         <label class="seq-mode"><input id="test-instrument" type="checkbox" checked disabled> Hear virtual MIDI synth</label>
@@ -95,29 +101,32 @@
         <div class="input-actions"><button id="cue" disabled>Rewind input</button><label><input id="repeat" type="checkbox" disabled>Repeat input</label></div>
         <button id="mic" disabled>Use microphone</button>
       </section>
-      <section>
+      <section id="tape-panel">
         <h2>Tape <span id="tape-length">6 SEC</span></h2>
         <div class="tape-insert"><label for="custom-length">Seconds</label><input id="custom-length" type="number" min="0.000016" step="any" value="6" aria-label="Tape length in seconds"><button id="insert-tape" disabled>Insert</button></div>
         <label class="library-label" for="tape-library">Saved tapes</label><select id="tape-library" disabled><option value="6">6s</option><option value="8">8s</option></select>
         <div class="tapes" role="group" aria-label="Choose loop cassette"><button id="tape6" class="selected" aria-pressed="true" disabled>6 sec</button><button id="tape8" aria-pressed="false" disabled>8 sec</button></div>
         <p id="swap-note" class="hint">Stop before swapping.</p>
+      </section>
+      <section id="archive-panel">
         <a id="export" class="download-button" role="button" aria-disabled="true" disabled>Export WAV</a>
-        <p id="storage-status" class="hint">Recordings save in this browser after Stop.</p>
+        <p id="storage-status" class="hint">Tape and digital recordings save in this browser after recording ends.</p>
       </section>
       <p id="notice" role="status" aria-live="polite"></p>
       <details><summary>Audio &amp; MIDI connections</summary>
         <p>MIDI IN → step entry / clock → sequencer → MIDI OUT → synth or drum machine.</p>
-        <p>Audio IN → selected tape recording. Tape heads → playback amplifiers → audio gates → mix → Audio OUT. Both tapes keep moving when gated.</p>
+        <p>Audio IN → selected tape or digital recording. Digital mode uses the Daisy's RAM and leaves the tapes stopped. Tape heads → playback amplifiers → audio gates → mix → Audio OUT. Both tapes keep moving when gated.</p>
         <p>Proposed rear panel: four 3.5 mm sockets, MIDI IN / OUT (TRS Type A) and mono AUDIO IN / OUT. Allow an 18 × 8 × 12.3 mm jack body, 16 mm spacing and 22 mm clearance behind the panel per socket. Panel strip: 80 × 18 mm minimum; plug and case clearance still need checking.</p>
         <svg viewBox="0 0 80 27" class="io-panel" role="img" aria-label="Proposed 80 by 18 millimeter rear connector strip: MIDI in, MIDI out, audio in, audio out"><rect x="0.5" y="0.5" width="79" height="17" rx="1" fill="#b5ad94" stroke="#665f4e"/><g fill="#171916" stroke="#6c6d60" stroke-width="1"><circle cx="16" cy="8" r="2.5"/><circle cx="32" cy="8" r="2.5"/><circle cx="48" cy="8" r="2.5"/><circle cx="64" cy="8" r="2.5"/></g><g fill="#ddd" font-size="3" text-anchor="middle"><text x="16" y="23">MIDI IN</text><text x="32" y="23">MIDI OUT</text><text x="48" y="23">AUDIO IN</text><text x="64" y="23">AUDIO OUT</text></g></svg>
         <p>The two codec inputs switch between line input while recording and head returns while playing. Tape gates need a separate analog circuit after playback; MIDI sockets need the proper input isolator and output driver. This is a wiring proposal, not a measured Panasonic PCB fit.</p>
       </details>
       <details><summary>Details</summary>
-        <p>Click either cassette or its LEFT / RIGHT button to select a deck. The front REC / PLAY / STOP keys, audio input and tape controls apply to that deck. Play both / Stop both operate both decks. R: Record · S: Stop · Space: Play.</p>
+        <p>Choose Tape loops or Digital loop, or use the two-position side switch. Switching stops the old mode and retains all recordings. Click a cassette to return to its tape deck. In digital mode the front keys operate the RAM looper; in tape mode they operate the selected deck. R: Record · S: Stop · Space: Play.</p>
+        <p>Digital recording stores mono audio in Daisy SDRAM. A file closes and starts looping when input ends; Repeat input keeps recording up to 60 seconds. REC while stopped replaces the digital loop; during playback it adds a layer. Overdubs saturate at full scale. Clear only works while stopped. Digital loops save separately from tape libraries and export as WAV. The functional emulator does not validate physical SDRAM initialization or access timing.</p>
         <p>The 16 LEDs show the selected track: dim red marks enabled steps; bright red marks the playing step. The outlined bench step is the edit cursor. The bench editor is a virtual tool; the lid module only contains LEDs. Expand LED module below the machine for the PCB footprint and depth drawing.</p>
         <p>Recording replaces tape audio. Files stop recording when they finish; Repeat input keeps them running. Short clips leave silence in the rest of the loop. Use headphones with the microphone.</p>
         <p>Runs the AnsaLoop ARM firmware in Virtual Daisy, using a fast linear tape model. The separate circuit lab runs ngspice. Panasonic electrical parameters are not measured yet.</p>
-        <p>One ARM firmware image controls both virtual transports and the sequencer. GPIO contacts control REC / PLAY / STOP / CUE. MIDI uses the emulated 31,250-baud UART. The virtual MIDI synth is an external test receiver. The front selector is provisionally left tape / SEQ / right tape; side switches and spare LED remain unassigned. Independent physical operation of the Panasonic mechanisms is not verified yet.</p>
+        <p>One ARM firmware image controls both virtual transports, the digital looper and the sequencer. GPIO contacts control REC / PLAY / STOP / CUE and Tape/Digital selection. MIDI uses the emulated 31,250-baud UART. The front selector is provisionally left tape / SEQ / right tape; the three-position side switch and spare LED remain unassigned. Loop gates use each tape's track or the right track for the single digital loop. Physical mechanism operation is unverified.</p>
         <p>Audio stays on this computer. Tapes save after stopping and on Power off. Export recordings you want to keep.</p>
         <p id="engine-status"></p>
         <p><a href="https://github.com/UnitedCode/virtual-ansaloop" target="_blank" rel="noopener">Interface source</a> · <a href="https://github.com/UnitedCode/ansaloop" target="_blank" rel="noopener">Firmware and circuits</a></p>

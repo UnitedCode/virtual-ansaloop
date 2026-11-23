@@ -5,11 +5,11 @@ version = 4
 [[package]]
 name = "ansaloop-sim"
 version = "0.1.0"
-source = "git+https://github.com/UnitedCode/ansaloop?rev=069a2e72e807df66141a5c685009d4fd56985a1d#069a2e72e807df66141a5c685009d4fd56985a1d"
+source = "git+https://github.com/UnitedCode/ansaloop?rev=930695e098b387a84c7af2f8c5975d992da6c580#930695e098b387a84c7af2f8c5975d992da6c580"
 dependencies = [
  "hound",
  "sha2",
- "virtual-daisy",
+ "virtual-daisy 0.2.1",
 ]
 
 [[package]]
@@ -323,7 +323,7 @@ dependencies = [
  "ansaloop-sim",
  "hound",
  "sha2",
- "virtual-daisy",
+ "virtual-daisy 0.2.6",
 ]
 
 [[package]]
@@ -344,7 +344,17 @@ source = "git+https://github.com/UnitedCode/virtual-daisy?rev=035c9d99291781496c
 dependencies = [
  "hound",
  "sha2",
- "zmu_cortex_m",
+ "zmu_cortex_m 0.1.0",
+]
+
+[[package]]
+name = "virtual-daisy"
+version = "0.2.6"
+source = "git+https://github.com/UnitedCode/virtual-daisy?rev=dcc604d41cb8363675f51ca8485553ba57ee9485#dcc604d41cb8363675f51ca8485553ba57ee9485"
+dependencies = [
+ "hound",
+ "sha2",
+ "zmu_cortex_m 0.1.3",
 ]
 
 [[package]]
@@ -424,6 +434,20 @@ dependencies = [
 name = "zmu_cortex_m"
 version = "0.1.0"
 source = "git+https://github.com/UnitedCode/virtual-daisy?rev=035c9d99291781496c4864e03386cee9648fa01c#035c9d99291781496c4864e03386cee9648fa01c"
+dependencies = [
+ "byteorder",
+ "enum-set",
+ "gdbstub",
+ "gdbstub_arch",
+ "log",
+ "num-bigfloat",
+ "thiserror",
+]
+
+[[package]]
+name = "zmu_cortex_m"
+version = "0.1.3"
+source = "git+https://github.com/UnitedCode/virtual-daisy?rev=dcc604d41cb8363675f51ca8485553ba57ee9485#dcc604d41cb8363675f51ca8485553ba57ee9485"
 dependencies = [
  "byteorder",
  "enum-set",

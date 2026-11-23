@@ -44,3 +44,9 @@ remains a board-design decision.
 Photo controls and connection markers are positioned from the source image and
 annotations. They are not a fabrication drawing. Firmware transport controls
 remain GPIO contacts; no host controller replaces ARM execution.
+
+The two-position side switch now provisionally selects Tape / Digital. In digital
+mode both tape transports stop and the same front keys control a mono RAM looper;
+CUE restarts it. The other side selector and spare LED remain unassigned. The
+bench's Tape loops / Digital loop buttons mirror this side switch, not proposed
+extra buttons in the physical case. Switching retains all recordings.

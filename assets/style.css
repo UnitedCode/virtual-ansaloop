@@ -180,3 +180,11 @@ select {background:#303030;color:#ddd;border:1px solid #626262;border-radius:2px
 .midi-port select {width:100%;min-width:0;}
 .midi-monitor {display:block;font:11px/1.6 ui-monospace,monospace;color:#d2b895;overflow-wrap:anywhere;}
 .io-panel {display:block;width:100%;margin-top:12px;}
+[hidden] {display:none!important;}
+.audio-mode {display:flex;gap:8px;margin:6px 0 12px;}
+.audio-mode button {flex:1;}
+.audio-mode button[aria-pressed=true] {border-color:#d4aa72;background:#4a4133;color:#f0d9b6;}
+.digital-progress {height:4px;background:#171717;overflow:hidden;}
+#digital-progress-bar {height:100%;width:0;background:#cba16f;}
+#digital-clear {width:100%;}
+.digital-mode .cassette {opacity:.55;}

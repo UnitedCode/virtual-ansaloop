@@ -8,10 +8,12 @@ use virtual_daisy::{
     machine::{Carrier, Machine},
 };
 pub const FIRMWARE: &[u8] = include_bytes!("../../firmware/ansaloop.elf");
-pub const EXPECTED_SHA: &str = "517fd66b84c1a86edcd59e2d33c2f351ff35bf4beaa085ca9e69b0fdaf1a63a8";
+pub const EXPECTED_SHA: &str = "2da57712f0e2bee3a89fee774a87a00f4a33565cfcfd9a1b78d3bcab81737cd7";
 pub type Result<T> = std::result::Result<T, String>;
 pub const MAX_MEDIA_FRAMES: usize = 64 * 1024 * 1024;
 pub const MAX_SOURCE_FRAMES: usize = 32 * 1024 * 1024;
+mod digital;
+pub use digital::{DigitalSnapshot, DIGITAL_CAPACITY};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeckId {
@@ -213,6 +215,10 @@ pub struct Engine {
     cue_release: u64,
     serial: Vec<(u64, u8)>,
     receiver: sequencer::Receiver,
+    digital_input: digital::Input,
+    digital_flags: u32,
+    digital_cache: Vec<f32>,
+    digital_cache_key: Option<(u32, u32)>,
     // Compatibility aliases for the original right-deck API.
     pub microphone: bool,
     pub repeat_source: bool,
@@ -246,6 +252,10 @@ impl Engine {
             cue_release: 0,
             serial: Vec::new(),
             receiver: Default::default(),
+            digital_input: Default::default(),
+            digital_flags: 0,
+            digital_cache: Vec::new(),
+            digital_cache_key: None,
             microphone: false,
             repeat_source: false,
             dirty: false,
@@ -345,7 +355,8 @@ impl Engine {
     pub fn load_source_deck(&mut self, id: DeckId, samples: Vec<f32>, hz: u32) -> Result<()> {
         let other = 1 - id.index();
         if !(8000..=192000).contains(&hz)
-            || samples.len() + self.tapes[other].source.len() > MAX_SOURCE_FRAMES
+            || samples.len() + self.tapes[other].source.len() + self.digital_input.samples.len()
+                > MAX_SOURCE_FRAMES
             || samples.iter().any(|v| !v.is_finite() || v.abs() > 1.)
         {
             return Err(
@@ -369,10 +380,18 @@ impl Engine {
         t.source_ended = false;
     }
     fn tick(&mut self, mic: f32) -> Result<[f32; 2]> {
-        let input = [
-            self.tapes[0].input(mic, self.frame),
-            self.tapes[1].input(mic, self.frame),
-        ];
+        let input = if self.digital_flags & 1 != 0 {
+            let (value, finish) = self.digital_input.sample(mic, self.digital_flags & 2 != 0);
+            if finish {
+                self.press_deck(DeckId::Right, Button::Play);
+            }
+            [value, value]
+        } else {
+            [
+                self.tapes[0].input(mic, self.frame),
+                self.tapes[1].input(mic, self.frame),
+            ]
+        };
         if self.machine.queued_input_frames() == 0 {
             self.machine.input(&[self.adc]).map_err(|e| e.to_string())?;
         }
@@ -408,9 +427,15 @@ impl Engine {
             }
         }
         let gpio = self.machine.read32(0x58020014).map_err(|e| e.to_string())?;
+        self.digital_flags = (gpio >> 10) & 3;
         let synth = self.receiver.sample();
         for i in 0..2 {
-            let target = if gpio & (1 << (8 + i)) != 0 { 1. } else { 0. };
+            let gate = if self.digital_flags & 1 != 0 {
+                8
+            } else {
+                8 + i
+            };
+            let target = if gpio & (1 << gate) != 0 { 1. } else { 0. };
             self.gate_gain[i] += (target - self.gate_gain[i]) * 0.016;
             self.monitor[i] = self.output[i] * self.gate_gain[i] + synth;
         }
