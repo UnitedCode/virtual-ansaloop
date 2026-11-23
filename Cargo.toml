@@ -1,0 +1,12 @@
+[workspace]
+members = ["engine", "web", "xtask"]
+default-members = ["xtask"]
+resolver = "2"
+
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+incremental = false
+debug = 0
