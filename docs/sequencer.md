@@ -62,3 +62,8 @@ Both virtual decks operate independently. Whether the donor mechanisms can do
 so with their original motor/control arrangement remains unverified. The browser
 tape model is linear and synthetic; its new playback-gate response is a smooth
 1 ms approximation, not an ngspice-validated gate circuit or measured tape sound.
+
+The later digital-looper mode uses the same right-track gate after the digital
+output. The left track still sends MIDI; it has no second digital sample slot.
+Selecting Tape/Digital stops the old looper mode, retains its recordings and
+returns the front keys to looper control. It does not stop the MIDI sequence.

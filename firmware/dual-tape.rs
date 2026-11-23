@@ -3,6 +3,7 @@
 #![no_main]
 #[path = "control.rs"]
 mod control;
+mod digital;
 mod sequencer;
 use control::{Command, Controller};
 use core::{
@@ -21,6 +22,8 @@ static mut TICKS: u32 = 0;
 static mut GATES: [u16; 2] = [0; 2];
 static mut SEQ: sequencer::Sequencer = sequencer::Sequencer::new();
 static mut CUE_HELD: bool = false;
+static mut DIGITAL: digital::Looper = digital::Looper::new();
+static mut DIGITAL_MODE: bool = false;
 global_asm!(
     r#"
 .syntax unified
@@ -43,11 +46,19 @@ unsafe fn buttons(deck: usize) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn audio_irq() {
     let seq = &mut *core::ptr::addr_of_mut!(SEQ);
+    let digital = &mut *core::ptr::addr_of_mut!(DIGITAL);
     for _ in 0..16 {
         if read(0x4001101c) & 32 == 0 {
             break;
         }
         seq.receive(read(0x40011024) as u8);
+    }
+    if let Some((command, length)) = seq.digital_request.take() {
+        if command == 6 {
+            digital.clear();
+        } else {
+            digital.restore(length);
+        }
     }
     for _ in 0..2 {
         if read(0x4001101c) & 128 == 0 {
@@ -63,10 +74,17 @@ pub unsafe extern "C" fn audio_irq() {
         let c = read(0x58020810);
         let selector = read(0x58020410);
         let sequence_mode = selector & (1 << 14) != 0;
+        let digital_mode = c & (1 << 13) != 0;
+        if DIGITAL_MODE && !digital_mode {
+            digital.stop();
+        }
+        DIGITAL_MODE = digital_mode;
         seq.track = usize::from(selector & (1 << 15) != 0);
         let cue = c & (1 << 12) != 0;
         if cue && !CUE_HELD && sequence_mode {
             seq.cue();
+        } else if cue && !CUE_HELD && digital_mode {
+            digital.position = 0;
         }
         CUE_HELD = cue;
         for deck in 0..2 {
@@ -81,8 +99,18 @@ pub unsafe extern "C" fn audio_irq() {
                 } else if rising & 1 != 0 {
                     seq.start(!seq.external);
                 }
+            } else if digital_mode {
+                if rising & 4 != 0 {
+                    digital.stop();
+                } else if rising & 2 != 0 {
+                    digital.record();
+                } else if rising & 1 != 0 {
+                    digital.play();
+                }
             }
-            let request = if sequence_mode {
+            let request = if digital_mode {
+                Some(Command::Stop)
+            } else if sequence_mode {
                 None
             } else if rising & 4 != 0 {
                 Some(Command::Stop)
@@ -115,15 +143,38 @@ pub unsafe extern "C" fn audio_irq() {
             seq.sample();
             let left = read(0x40015820);
             let right = read(0x40015820);
-            write(0x40015840, if GATES[0] & 3 == 3 { left } else { 0 });
-            write(0x40015840, if GATES[1] & 3 == 3 { right } else { 0 });
+            if DIGITAL_MODE {
+                let sample = digital.sample(left);
+                write(0x40015840, sample);
+                write(0x40015840, sample);
+            } else {
+                write(0x40015840, if GATES[0] & 3 == 3 { left } else { 0 });
+                write(0x40015840, if GATES[1] & 3 == 3 { right } else { 0 });
+            }
         }
     }
     // Proposed post-codec analog gates. Record-head DAC signals stay untouched.
     let gates = u32::from(seq.gates) << 8;
     write(0x58020018, gates | ((!gates & 0x300) << 16));
+    let digital_flags =
+        (u32::from(DIGITAL_MODE) << 10) | (u32::from(DIGITAL_MODE && digital.capture()) << 11);
+    write(0x58020018, digital_flags | ((!digital_flags & 0xc00) << 16));
     // Read-only host diagnostics at the control rate, not per audio frame.
     if TICKS & 15 == 1 {
+        for (i, v) in [
+            u32::from(DIGITAL_MODE),
+            digital.state,
+            digital.length,
+            digital.position,
+            digital.revision,
+            digital.wraps,
+            digital::CAPACITY,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write(0x20000100 + i as u32 * 4, v);
+        }
         for (i, v) in [
             u32::from(seq.running),
             u32::from(seq.step),
@@ -163,13 +214,15 @@ pub unsafe extern "C" fn tape_main() -> ! {
     GATES = [0; 2];
     SEQ = sequencer::Sequencer::new();
     CUE_HELD = false;
+    DIGITAL = digital::Looper::new();
+    DIGITAL_MODE = false;
     write(0x20000000, 0);
     write(0x20000004, 0);
     write(0x580244e0, 7); // GPIO A/B/C clocks.
     write(0x58020018, 255 << 16);
-    write(0x58020000, (read(0x58020000) & !0xfffff) | 0x55555);
+    write(0x58020000, (read(0x58020000) & !0xffffff) | 0x555555);
     write(0x58020400, read(0x58020400) & !(255 << 24));
-    write(0x58020800, read(0x58020800) & !(0x3ffff << 8));
+    write(0x58020800, read(0x58020800) & !(0xfffff << 8));
     PREVIOUS = [buttons(0), buttons(1)]; // Held record at boot is not a new request.
     write(0x580244e8, (1 << 22) | 1); // I2C2 and TIM2.
     write(0x40000028, 63);

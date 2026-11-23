@@ -115,6 +115,9 @@ pub async fn save(
         &key(deck, "catalog-frames"),
     )?;
     store.put_with_key(&selected.into(), &key(deck, "inserted-frames"))?;
+    completed(tx).await
+}
+async fn completed(tx: IdbTransaction) -> Result<(), JsValue> {
     let mut complete = None;
     let mut failure = None;
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
@@ -138,4 +141,26 @@ pub async fn save(
     drop(complete);
     drop(failure);
     result.map(|_| ())
+}
+pub async fn load_digital(db: &IdbDatabase) -> Result<Option<Vec<f32>>, JsValue> {
+    let value = get_record(db, "digital-loop-pcm-v1".into()).await?;
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    if !value.is_instance_of::<Float32Array>() {
+        return Err(js_error("invalid saved digital loop"));
+    }
+    let array = Float32Array::new(&value);
+    if array.length() > virtual_ansaloop_engine::DIGITAL_CAPACITY {
+        return Err(js_error("saved digital loop exceeds capacity"));
+    }
+    Ok(Some(array.to_vec()))
+}
+pub async fn save_digital(db: &IdbDatabase, samples: Vec<f32>) -> Result<(), JsValue> {
+    let tx = db.transaction_with_str_and_mode("tapes", IdbTransactionMode::Readwrite)?;
+    tx.object_store("tapes")?.put_with_key(
+        &Float32Array::from(samples.as_slice()),
+        &"digital-loop-pcm-v1".into(),
+    )?;
+    completed(tx).await
 }

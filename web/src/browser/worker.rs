@@ -9,7 +9,11 @@ struct Runtime {
     levels: [f64; 2],
     level: f64,
     active: DeckId,
-    source_names: [String; 2],
+    source_names: [String; 3],
+    digital: bool,
+    digital_db: Option<IdbDatabase>,
+    digital_saved: u32,
+    digital_saving: bool,
     export_key: Option<(usize, u32, u64)>,
 }
 fn send(scope: &DedicatedWorkerGlobalScope, kind: &str, text: &str) {
@@ -18,6 +22,26 @@ fn send(scope: &DedicatedWorkerGlobalScope, kind: &str, text: &str) {
     let _ = scope.post_message(&o);
 }
 fn prepare_export(r: &mut Runtime) -> Result<(), JsValue> {
+    if r.digital {
+        let s = r.engine.digital_snapshot().map_err(js_error)?;
+        let key = (2, s.frames, u64::from(s.revision));
+        if s.capturing() || s.frames == 0 || r.export_key == Some(key) {
+            return Ok(());
+        }
+        if !r.engine.prepare_digital_snapshot(0).map_err(js_error)? {
+            return Ok(());
+        }
+        let bytes = Uint8Array::from(r.engine.export_digital_wav().map_err(js_error)?.as_slice());
+        let o = packet("export");
+        set(&o, "bytes", &bytes);
+        set(&o, "seconds", f64::from(s.frames) / 62500.);
+        set(&o, "deck", r.active.index() as u32);
+        set(&o, "digital", true);
+        r.scope
+            .post_message_with_transfer(&o, &Array::of1(&bytes.buffer()))?;
+        r.export_key = Some(key);
+        return Ok(());
+    }
     let s = r.engine.snapshot_deck(r.active);
     let key = (r.active.index(), s.tape_frames, s.written);
     if !s.can_swap || r.export_key == Some(key) {
@@ -33,6 +57,7 @@ fn prepare_export(r: &mut Runtime) -> Result<(), JsValue> {
     set(&o, "bytes", &bytes);
     set(&o, "seconds", s.seconds);
     set(&o, "deck", r.active.index() as u32);
+    set(&o, "digital", false);
     r.scope
         .post_message_with_transfer(&o, &Array::of1(&bytes.buffer()))?;
     r.export_key = Some(key);
@@ -49,7 +74,11 @@ fn deck_status(r: &Runtime, id: DeckId) -> Object {
     set(&o, "canSwap", s.can_swap);
     set(&o, "frames", s.frames as f64);
     set(&o, "written", s.written as f64);
-    set(&o, "level", r.levels[id.index()]);
+    set(
+        &o,
+        "level",
+        if r.digital { 0. } else { r.levels[id.index()] },
+    );
     set(&o, "sourcePosition", s.source_position);
     set(&o, "sourceDuration", s.source_duration);
     set(&o, "eof", s.eof);
@@ -64,7 +93,41 @@ fn deck_status(r: &Runtime, id: DeckId) -> Object {
     o
 }
 fn status(r: &mut Runtime, diagnostics: Option<&JsValue>) {
-    let o = deck_status(r, r.active);
+    let o = if r.digital {
+        let o = Object::new();
+        if let Ok(s) = r.engine.digital_snapshot() {
+            set(&o, "state", s.name());
+            set(&o, "seconds", f64::from(s.frames) / 62500.);
+            set(&o, "position", f64::from(s.position) / 62500.);
+            set(
+                &o,
+                "written",
+                if s.state == 1 { s.position } else { s.frames },
+            );
+            set(&o, "revision", s.revision);
+            set(&o, "wraps", s.wraps);
+            set(&o, "canSwap", !s.capturing());
+            set(
+                &o,
+                "exportReady",
+                !s.capturing()
+                    && s.frames > 0
+                    && r.export_key == Some((2, s.frames, u64::from(s.revision))),
+            );
+            set(&o, "sourcePosition", s.source_position);
+            set(&o, "sourceDuration", s.source_duration);
+            set(&o, "microphone", s.microphone);
+            set(&o, "repeat", s.repeat);
+            set(&o, "eof", s.eof);
+        }
+        set(&o, "sourceName", r.source_names[2].as_str());
+        set(&o, "deck", r.active.index() as u32);
+        o
+    } else {
+        deck_status(r, r.active)
+    };
+    set(&o, "digital", r.digital);
+    set(&o, "frames", r.engine.snapshot().frames as f64);
     set(&o, "kind", "status");
     set(&o, "sha", EXPECTED_SHA);
     set(&o, "mixLevel", r.level);
@@ -100,6 +163,50 @@ fn status(r: &mut Runtime, diagnostics: Option<&JsValue>) {
     let _ = r.scope.post_message(&o);
 }
 fn save_if_stopped(runtime: Rc<RefCell<Runtime>>) {
+    {
+        let mut r = runtime.borrow_mut();
+        if let Ok(s) = r.engine.digital_snapshot() {
+            if !s.capturing()
+                && s.revision != r.digital_saved
+                && !r.digital_saving
+                && r.engine.prepare_digital_snapshot(0).unwrap_or(false)
+            {
+                if let Some(db) = r.digital_db.clone() {
+                    match r.engine.digital_samples() {
+                        Ok(samples) => {
+                            r.digital_saving = true;
+                            drop(r);
+                            let runtime = runtime.clone();
+                            spawn_local(async move {
+                                let result = storage::save_digital(&db, samples).await;
+                                let mut r = runtime.borrow_mut();
+                                r.digital_saving = false;
+                                match result {
+                                    Ok(()) => {
+                                        r.digital_saved = s.revision;
+                                        send(
+                                            &r.scope,
+                                            "storage",
+                                            "Digital loop saved in this browser.",
+                                        );
+                                    }
+                                    Err(e) => {
+                                        r.digital_db = None;
+                                        send(
+                                            &r.scope,
+                                            "warning",
+                                            &format!("Digital save failed; export the loop: {e:?}"),
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => send(&r.scope, "warning", &e),
+                    }
+                }
+            }
+        }
+    }
     for id in DeckId::ALL {
         let i = id.index();
         let mut r = runtime.borrow_mut();
@@ -154,6 +261,7 @@ fn audio(
     set(&o, "audio", &samples);
     port.post_message_with_transferable(&o, &Array::of1(&samples.buffer()))?;
     r.blocks += 1;
+    r.engine.prepare_digital_snapshot(2048).map_err(js_error)?;
     let midi = r.engine.take_midi();
     if !midi.is_empty() {
         let o = packet("midi-out");
@@ -174,7 +282,7 @@ pub async fn start_worker() -> Result<(), JsValue> {
     let scope: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
     let mut engine = Engine::new().map_err(js_error)?;
     let opened = storage::open(&scope).await.ok();
-    let mut db = [opened.clone(), opened];
+    let mut db = [opened.clone(), opened.clone()];
     for id in DeckId::ALL {
         let i = id.index();
         let mut valid = true;
@@ -218,6 +326,19 @@ pub async fn start_worker() -> Result<(), JsValue> {
     engine.dirty = false;
     engine.dirty_decks = [false; 2];
     engine.render(&[0.; 256], 62500).map_err(js_error)?;
+    let mut digital_db = opened.clone();
+    if let Some(database) = &digital_db {
+        let result = match storage::load_digital(database).await {
+            Ok(Some(samples)) => engine.restore_digital(samples).map_err(js_error),
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            digital_db = None;
+            send(&scope,"storage","Saved digital loop could not be loaded. Its original record was retained; export new loops as WAV.");
+        }
+    }
+    let digital_saved = engine.digital_snapshot().map_err(js_error)?.revision;
     let runtime = Rc::new(RefCell::new(Runtime {
         engine,
         scope: scope.clone(),
@@ -228,6 +349,10 @@ pub async fn start_worker() -> Result<(), JsValue> {
         level: 0.,
         active: DeckId::Right,
         source_names: Default::default(),
+        digital: false,
+        digital_db,
+        digital_saved,
+        digital_saving: false,
         export_key: None,
     }));
     let state = runtime.clone();
@@ -250,7 +375,14 @@ pub async fn start_worker() -> Result<(), JsValue> {
             }
             let mut r = state.borrow_mut();
             let id = DeckId::from_index(number(&data, "deck") as usize).map_err(js_error)?;
+            let digital = get(&data, "digital").as_bool().unwrap_or(false);
             match string(&data, "kind").as_str() {
+                "audio-mode" => {
+                    r.digital = digital;
+                    r.engine.set_digital_mode(digital).map_err(js_error)?;
+                    r.export_key = None;
+                }
+                "digital-clear" => r.engine.clear_digital().map_err(js_error)?,
                 "select" => r.active = id,
                 "record" | "play" | "stop" => {
                     r.engine
@@ -283,12 +415,18 @@ pub async fn start_worker() -> Result<(), JsValue> {
                     .engine
                     .test_instrument(get(&data, "enabled").as_bool().unwrap_or(false)),
                 "play-both" => {
+                    if r.digital {
+                        return Err(js_error("Switch to tape mode first"));
+                    }
                     r.engine.sequence_mode(false, id).map_err(js_error)?;
                     for id in DeckId::ALL {
                         r.engine.press_deck(id, Button::Play);
                     }
                 }
                 "stop-both" => {
+                    if r.digital {
+                        return Err(js_error("Switch to tape mode first"));
+                    }
                     r.engine.sequence_mode(false, id).map_err(js_error)?;
                     for id in DeckId::ALL {
                         r.engine.press_deck(id, Button::Stop);
@@ -299,16 +437,32 @@ pub async fn start_worker() -> Result<(), JsValue> {
                     .insert_tape_deck(id, number(&data, "seconds"))
                     .map_err(js_error)?,
                 "source" => {
-                    r.engine
-                        .load_source_deck(
-                            id,
-                            Float32Array::new(&get(&data, "samples")).to_vec(),
-                            number(&data, "hz") as u32,
-                        )
-                        .map_err(js_error)?;
-                    r.source_names[id.index()] = string(&data, "name");
+                    if digital {
+                        r.engine
+                            .load_digital_source(
+                                Float32Array::new(&get(&data, "samples")).to_vec(),
+                                number(&data, "hz") as u32,
+                            )
+                            .map_err(js_error)?;
+                    } else {
+                        r.engine
+                            .load_source_deck(
+                                id,
+                                Float32Array::new(&get(&data, "samples")).to_vec(),
+                                number(&data, "hz") as u32,
+                            )
+                            .map_err(js_error)?;
+                    }
+                    r.source_names[if digital { 2 } else { id.index() }] = string(&data, "name");
                     send(&r.scope, "notice", "Audio loaded.");
                 }
+                "mic" if digital => r
+                    .engine
+                    .set_digital_microphone(get(&data, "enabled").as_bool().unwrap_or(false)),
+                "repeat" if digital => r
+                    .engine
+                    .set_digital_repeat(get(&data, "enabled").as_bool().unwrap_or(false)),
+                "cue" if digital => r.engine.rewind_digital_source(),
                 "mic" => r
                     .engine
                     .set_microphone(id, get(&data, "enabled").as_bool().unwrap_or(false)),
@@ -328,6 +482,12 @@ pub async fn start_worker() -> Result<(), JsValue> {
                     for _ in 0..80 {
                         r.engine.render(&[0.; 256], 62500).map_err(js_error)?;
                     }
+                    let digital = r
+                        .digital_db
+                        .clone()
+                        .map(|db| r.engine.digital_samples().map(|samples| (db, samples)))
+                        .transpose()
+                        .map_err(js_error)?;
                     let libraries = DeckId::ALL.map(|id| {
                         (
                             r.db[id.index()].clone(),
@@ -344,6 +504,16 @@ pub async fn start_worker() -> Result<(), JsValue> {
                                     send(&scope,"warning","Tape save failed. Keep this page open and export the recording.");
                                     return;
                                 }
+                            }
+                        }
+                        if let Some((db, samples)) = digital {
+                            if storage::save_digital(&db, samples).await.is_err() {
+                                send(
+                                    &scope,
+                                    "warning",
+                                    "Digital save failed. Keep this page open and export the loop.",
+                                );
+                                return;
                             }
                         }
                         send(&scope, "off", "");

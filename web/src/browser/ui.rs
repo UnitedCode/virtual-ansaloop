@@ -1,5 +1,6 @@
 use super::*;
 use virtual_ansaloop_engine::{EXPECTED_SHA, MAX_SOURCE_FRAMES};
+mod digital;
 mod sequence;
 
 #[derive(Default)]
@@ -11,7 +12,8 @@ struct Ui {
     source: Option<MediaStreamAudioSourceNode>,
     ready: bool,
     active: usize,
-    mic_decks: [bool; 2],
+    mic_decks: [bool; 3],
+    digital: bool,
     mic_pending: bool,
     power_pending: bool,
     volume: f32,
@@ -61,6 +63,7 @@ fn send(state: &Rc<RefCell<Ui>>, kind: &str) {
         let o = packet(kind);
         set(&o, "deck", state.borrow().active as u32);
         set(&o, "sequenceMode", input("sequence-mode").checked());
+        set(&o, "digital", state.borrow().digital);
         let _ = w.post_message(&o);
     }
 }
@@ -72,7 +75,7 @@ fn warning(error: JsValue) {
     web_sys::console::warn_1(&error);
 }
 fn stop_mic(state: &mut Ui) {
-    state.mic_decks = [false; 2];
+    state.mic_decks = [false; 3];
     if let Some(stream) = state.stream.take() {
         for track in stream.get_tracks().iter() {
             track.unchecked_into::<MediaStreamTrack>().stop();
@@ -84,6 +87,7 @@ fn stop_mic(state: &mut Ui) {
     text("mic", "Use microphone");
 }
 fn off(state: &Rc<RefCell<Ui>>) {
+    disabled("digital-clear", true);
     sequence::power(state, false);
     let mut s = state.borrow_mut();
     s.ready = false;
@@ -233,15 +237,30 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
             let _ = el(id).class_list().remove_1("on");
         }
     }
-    if number(data, "deck") as usize != state.borrow().active {
+    let is_digital = get(data, "digital").as_bool().unwrap_or(false);
+    if number(data, "deck") as usize != state.borrow().active
+        || is_digital != state.borrow().digital
+    {
         return;
     }
+    let _ = el("transport-state")
+        .set_attribute("data-digital", if is_digital { "true" } else { "false" });
     let side = if state.borrow().active == 0 {
         "Right"
     } else {
         "Left"
     };
-    text("selected-deck", &format!("{side} deck"));
+    text(
+        "selected-deck",
+        &if is_digital {
+            "Digital loop".into()
+        } else {
+            format!("{side} deck")
+        },
+    );
+    if is_digital {
+        state.borrow_mut().mic_decks[2] = get(data, "microphone").as_bool().unwrap_or(false);
+    }
     let name = string(data, "sourceName");
     text(
         "source-name",
@@ -270,29 +289,31 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
     );
     let snapshot = string(data, "state");
     let seconds = number(data, "seconds");
-    let changed = state.borrow().tape_seconds != seconds;
-    state.borrow_mut().tape_seconds = seconds;
-    if changed {
-        input("custom-length").set_value(&seconds.to_string());
-    }
-    let catalog = Array::from(&get(data, "catalog"))
-        .iter()
-        .filter_map(|v| v.as_f64())
-        .collect::<Vec<_>>();
-    if state.borrow().catalog != catalog {
-        let select = el("tape-library");
-        select.set_text_content(None);
-        for seconds in &catalog {
-            let option = doc().create_element("option").unwrap();
-            option.set_attribute("value", &seconds.to_string()).unwrap();
-            option.set_text_content(Some(&format!("{seconds}s")));
-            select.append_child(&option).unwrap();
+    if !is_digital {
+        let changed = state.borrow().tape_seconds != seconds;
+        state.borrow_mut().tape_seconds = seconds;
+        if changed {
+            input("custom-length").set_value(&seconds.to_string());
         }
-        state.borrow_mut().catalog = catalog;
+        let catalog = Array::from(&get(data, "catalog"))
+            .iter()
+            .filter_map(|v| v.as_f64())
+            .collect::<Vec<_>>();
+        if state.borrow().catalog != catalog {
+            let select = el("tape-library");
+            select.set_text_content(None);
+            for seconds in &catalog {
+                let option = doc().create_element("option").unwrap();
+                option.set_attribute("value", &seconds.to_string()).unwrap();
+                option.set_text_content(Some(&format!("{seconds}s")));
+                select.append_child(&option).unwrap();
+            }
+            state.borrow_mut().catalog = catalog;
+        }
+        el("tape-library")
+            .unchecked_into::<HtmlSelectElement>()
+            .set_value(&seconds.to_string());
     }
-    el("tape-library")
-        .unchecked_into::<HtmlSelectElement>()
-        .set_value(&seconds.to_string());
     let can_swap = get(data, "canSwap").as_bool().unwrap_or(false);
     text("transport-state", &snapshot.to_uppercase());
     let position = number(data, "position");
@@ -306,20 +327,23 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
             let _ = list.remove_1("on");
         }
     }
-    disabled("insert-tape", !can_swap);
-    disabled("tape-library", !can_swap);
+    disabled("insert-tape", is_digital || !can_swap);
+    disabled("tape-library", is_digital || !can_swap);
     let _ = el("transport-led").set_attribute(
         "class",
-        if snapshot == "Recording" {
+        if snapshot == "Recording" || snapshot == "Overdubbing" {
             "led rec"
         } else {
             "led lit"
         },
     );
     for (id, active) in [
-        ("record", snapshot == "Recording"),
-        ("stop", snapshot == "Stopped"),
-        ("play", snapshot == "Playing"),
+        (
+            "record",
+            snapshot == "Recording" || snapshot == "Overdubbing",
+        ),
+        ("stop", snapshot == "Stopped" || snapshot == "Empty"),
+        ("play", snapshot == "Playing" || snapshot == "Overdubbing"),
     ] {
         let list = el(id).class_list();
         if active {
@@ -329,7 +353,7 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
         }
     }
     for (id, length) in [("tape6", 6.), ("tape8", 8.)] {
-        disabled(id, !can_swap);
+        disabled(id, is_digital || !can_swap);
         let _ = el(id).set_attribute(
             "aria-pressed",
             if seconds == length { "true" } else { "false" },
@@ -415,7 +439,15 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
         .style()
         .set_property("width", &format!("{}%", (level * 300.).clamp(0., 100.)));
     if state.borrow().ready {
-        disabled("export", !can_swap);
+        disabled(
+            "export",
+            !can_swap
+                || (is_digital
+                    && (seconds == 0. || get(data, "exportReady").as_bool() != Some(true))),
+        );
+    }
+    if is_digital {
+        digital::status(state, data);
     }
     if input("sequence-mode").checked() {
         let seq = get(data, "sequence");
@@ -437,7 +469,9 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
         }
         let _ = el("play-led").class_list().toggle_with_force(
             "on",
-            running || decks.iter().any(|d| string(&d, "state") == "Playing"),
+            running
+                || (is_digital && (snapshot == "Playing" || snapshot == "Overdubbing"))
+                || decks.iter().any(|d| string(&d, "state") == "Playing"),
         );
     }
 }
@@ -506,6 +540,7 @@ fn connect_audio(state: &Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     let _ = s.worker.as_ref().unwrap().post_message(&o);
     drop(s);
     sequence::power(state, true);
+    send(state, "audio-mode");
     send(state, "sequence-mode");
     text("notice", "");
     Ok(())
@@ -548,7 +583,9 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
             }
             "off" => off(&s),
             "export" => {
-                if number(&data, "deck") as usize != s.borrow().active {
+                if number(&data, "deck") as usize != s.borrow().active
+                    || get(&data, "digital").as_bool().unwrap_or(false) != s.borrow().digital
+                {
                     return;
                 }
                 let bytes = Uint8Array::new(&get(&data, "bytes"));
@@ -562,7 +599,9 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
                         anchor.set_href(&url);
                         anchor.set_download(&format!(
                             "ansaloop-{}-{}s.wav",
-                            if number(&data, "deck") == 0. {
+                            if get(&data, "digital").as_bool().unwrap_or(false) {
+                                "digital"
+                            } else if number(&data, "deck") == 0. {
                                 "right"
                             } else {
                                 "left"
@@ -605,6 +644,7 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
 }
 async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> {
     let deck = state.borrow().active;
+    let digital = state.borrow().digital;
     if file.size() > 100_000_000. {
         return Err(js_error("Choose an audio file under 100 MB."));
     }
@@ -641,6 +681,7 @@ async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> 
     let samples = Float32Array::from(mono.as_slice());
     let o = packet("source");
     set(&o, "deck", deck as u32);
+    set(&o, "digital", digital);
     set(&o, "name", file.name());
     set(&o, "samples", &samples);
     set(&o, "hz", buffer.sample_rate());
@@ -652,7 +693,7 @@ async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> 
         .worker
         .clone()
         .ok_or_else(|| js_error("Instrument powered off while decoding."))?;
-    s.mic_decks[deck] = false;
+    s.mic_decks[if digital { 2 } else { deck }] = false;
     if !s.mic_decks.iter().any(|v| *v) {
         stop_mic(&mut s);
     }
@@ -661,24 +702,28 @@ async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> 
 }
 async fn microphone(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     let deck = state.borrow().active;
+    let digital = state.borrow().digital;
+    let slot = if digital { 2 } else { deck };
     let existing = state.borrow().stream.is_some();
-    if state.borrow().mic_decks[deck] {
+    if state.borrow().mic_decks[slot] {
         let mut s = state.borrow_mut();
-        s.mic_decks[deck] = false;
+        s.mic_decks[slot] = false;
         if !s.mic_decks.iter().any(|v| *v) {
             stop_mic(&mut s);
         }
         let o = packet("mic");
         set(&o, "deck", deck as u32);
+        set(&o, "digital", digital);
         set(&o, "enabled", false);
         s.worker.as_ref().unwrap().post_message(&o)?;
         return Ok(());
     }
     if existing {
         let mut s = state.borrow_mut();
-        s.mic_decks[deck] = true;
+        s.mic_decks[slot] = true;
         let o = packet("mic");
         set(&o, "deck", deck as u32);
+        set(&o, "digital", digital);
         set(&o, "enabled", true);
         s.worker.as_ref().unwrap().post_message(&o)?;
         return Ok(());
@@ -714,9 +759,10 @@ async fn microphone(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     source.connect_with_audio_node(s.node.as_ref().unwrap())?;
     s.stream = Some(stream);
     s.source = Some(source);
-    s.mic_decks[deck] = true;
+    s.mic_decks[slot] = true;
     let o = packet("mic");
     set(&o, "deck", deck as u32);
+    set(&o, "digital", digital);
     set(&o, "enabled", true);
     s.worker.as_ref().unwrap().post_message(&o)?;
     text("mic", "Microphone on");
@@ -807,6 +853,7 @@ pub fn start_ui() {
         if let Some(w) = &s.borrow().worker {
             let o = packet("repeat");
             set(&o, "deck", s.borrow().active as u32);
+            set(&o, "digital", s.borrow().digital);
             set(&o, "enabled", input("repeat").checked());
             let _ = w.post_message(&o);
         }
@@ -851,21 +898,15 @@ pub fn start_ui() {
             gain.gain().set_value(volume);
         }
     });
-    for (id, name) in [
-        ("side-selector", "Side three-position switch"),
-        ("side-binary", "Side two-position switch"),
-    ] {
-        bind(el(id).as_ref(), "change", move |_| {
-            let control = input(id);
-            let value = if id == "side-binary" {
-                u32::from(control.checked()) + 1
-            } else {
-                control.value_as_number() as u32 + 1
-            };
-            let _ = control.set_attribute("data-position", &value.to_string());
-            text("notice", &format!("{name}: position {value} (unassigned)."));
-        });
-    }
+    bind(el("side-selector").as_ref(), "change", move |_| {
+        let control = input("side-selector");
+        let value = control.value_as_number() as u32 + 1;
+        let _ = control.set_attribute("data-position", &value.to_string());
+        text(
+            "notice",
+            &format!("Side three-position switch: position {value} (unassigned)."),
+        );
+    });
     bind(el("midi-jack").as_ref(), "click", move |_| {
         text(
             "notice",
@@ -888,6 +929,9 @@ pub fn start_ui() {
             }
             disabled("export", true);
             let _ = el("export").remove_attribute("href");
+            if s.borrow().digital {
+                digital::select(&s, false);
+            }
             send(&s, "select");
             send(&s, "sequence-mode");
         });
@@ -1009,4 +1053,5 @@ pub fn start_ui() {
         send(&s, kind);
     });
     sequence::init(&state);
+    digital::init(&state);
 }

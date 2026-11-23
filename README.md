@@ -1,6 +1,6 @@
 # Virtual AnsaLoop
 
-Panasonic EASA-PHONE KX-T1421 prototype: two tape loops and a 16-step MIDI
+Panasonic EASA-PHONE KX-T1421 prototype: two tape loops, a digital looper and a 16-step MIDI
 sequencer, running real Daisy ARM firmware in Virtual Daisy. Separate from
 Virtual Synthphone. [Play online](https://unitedcode.github.io/virtual-ansaloop/).
 
@@ -11,7 +11,7 @@ Virtual Synthphone. [Play online](https://unitedcode.github.io/virtual-ansaloop/
 2. **CUE** advances the edit cursor. **REC** toggles that step; **STOP** stops
    the sequence. LEFT / RIGHT selects the track, on MIDI channels 2 / 1.
 3. Select a step in the bench editor to change its note or enabled state.
-   Set BPM or choose **Tape gates** / **MIDI + tape gates** for rhythmic muting.
+   Set BPM or choose **Loop gates** / **MIDI + loop gates** for rhythmic muting.
 4. To hear tape gates, disable SEQ controls, **Play both** recorded tapes, then
    enable SEQ and press PLAY. Tapes keep moving; the gates only change the mix.
 5. Expand **MIDI input / output** for optional hardware ports. Nothing is
@@ -90,3 +90,34 @@ finished physical board support package. Expand the PCB drawing under the photo.
 and deliberately update the expected SHA256. `xtask layout` regenerates the
 dimensioned SVGs. Rust owns the engine, UI, storage and tools; JavaScript is
 limited to module startup and the mandatory AudioWorkletProcessor PCM bridge.
+
+## Digital looper
+
+Choose **Digital loop** (or flip the two-position side switch), load audio or
+use the microphone, then press **REC**. **PLAY** closes the recording and loops
+that length. **REC** during playback toggles overdub; **STOP** keeps the loop;
+**CUE** restarts its playhead. REC while stopped starts a replacement recording.
+A file closes and starts looping automatically at EOF unless Repeat is enabled.
+
+The single digital slot is mono, up to 60 seconds at the prototype's 62,500 Hz
+codec rate. Its sample buffer and all record/play/overdub logic live in ARM
+firmware, separate from the two simulated cassettes. Overdubbing adds input to
+stored PCM with signed 24-bit saturation. Clear works only while stopped.
+Switching Tape/Digital stops the old audio mode and retains all three recordings;
+press PLAY in the new mode to resume it. The sequencer can continue independently.
+Loop gates use the right track for the digital loop, or each track's tape deck.
+
+The browser saves the digital buffer separately from both cassette libraries,
+after capture/overdub ends and on Power off. Export WAV works during playback or
+while stopped. There is no JavaScript looper or host playback buffer replacing
+ARM execution. Browser persistence preloads only stopped sample data into the
+reserved SDRAM window, then sends a UART command for ARM to validate the length.
+Physical nonvolatile storage, SDRAM setup/timing and the complete board support
+package still need implementation/verification on hardware. The functional
+runtime validates the looper's instructions and memory behavior, not SDRAM timing.
+
+The runtime pin includes [Virtual Daisy PR #20](https://github.com/UnitedCode/virtual-daisy/pull/20),
+which implements SSAT rather than changing the firmware's compiled saturation.
+
+Building from source currently requires access to the pinned AnsaLoop simulator
+repository. The GitHub Pages build is precompiled and needs no repository access.

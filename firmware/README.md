@@ -60,3 +60,30 @@ carrier/test-equipment models, not substitutes for firmware sequencing.
 This image has not run on the physical donor or in the native ngspice lab.
 Motor drivers, head circuits, MIDI electrical interfaces and the full physical
 board support package still require design and measurement.
+
+## Digital mode
+
+`digital.rs` implements the single mono RAM looper. PC13 selects Digital instead
+of Tape; PA10 reports actual digital mode and PA11 reports active capture for
+external input routing. Both tape motor/record outputs are forced off in digital
+mode. Leaving digital mode finalizes capture and stops playback without clearing
+samples. Tape controls and sequencer contacts retain their previous assignments.
+In SEQ control mode the front keys edit/run the sequence without modifying the loop.
+
+REC while stopped replaces the loop; PLAY closes and plays it; REC while playing
+starts overdub and REC again finishes it. STOP finalizes and stops; CUE seeks the
+digital playhead to zero. At 3,750,000 samples, ARM closes the recording and loops
+automatically. The 15,000,000-byte buffer starts at `0xc0000000`, with sign-extended
+24-bit PCM in aligned 32-bit words. Overdub uses SSAT-clipped integer addition.
+The physical BSP must initialize SDRAM; the current functional runner does not
+validate SDRAM configuration/timing and this image remains a virtual probe.
+
+SysEx command 6 with argument 0 clears a stopped loop. Command 7 has four
+little-endian seven-bit digits giving a saved frame count. After external storage
+preloads stopped sample data, ARM accepts this count only while stopped and only
+up to capacity. The browser never writes the looper's control state or playhead.
+Read-only diagnostics at `0x20000100` are seven words: active mode, state
+(0 stopped, 1 record, 2 play, 3 overdub), length, position, revision, wrap count,
+capacity. Revision changes when capture completes, on clear or storage restore.
+Raw SAI channels contain the digital output in both channels; no tape head is
+used. The optional post-codec loop gate follows the right sequence track.
