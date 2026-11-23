@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#242424"><title>AnsaLoop prototype</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body><main>
+  <header><h1>AnsaLoop</h1><span>Panasonic EASA-PHONE KX-T1421</span></header>
+  <div class="bench">
+    <div class="device-column"><div class="photo-stage" id="device-view" aria-label="Panasonic KX-T1421 controls">
+      <img class="device-photo" src="easa-phone-straightened.png" alt="Panasonic KX-T1421 reference view" draggable="false">
+      <button id="secondary-slot" class="well-target secondary" aria-label="Select left tape deck" title="Select left tape deck" disabled></button>
+      <button id="primary-slot" class="well-target primary" aria-label="Select right tape deck" title="Select right tape deck" disabled></button>
+      <div class="cassette cassette-left" aria-label="Left deck loop cassette">
+        <img src="endless-cassette.png" alt="Panasonic endless loop cassette" draggable="false">
+        <span class="tape-duration" id="cassette-number-left">8s</span>
+        <i class="reel" id="reel-left-b"></i><i class="reel second-reel" id="reel-right-b"></i>
+      </div>
+      <div class="cassette" id="cassette" aria-label="Inserted virtual loop cassette">
+        <img src="endless-cassette.png" alt="Panasonic endless loop cassette" draggable="false">
+        <span class="tape-duration" id="cassette-number">6s</span>
+        <i class="reel" id="reel-left"></i><i class="reel" id="reel-right"></i>
+      </div>
+      <svg class="lid-harness" viewBox="0 0 1230 1278" aria-label="Proposed six-wire cable route with a service loop at the lid hinge"><path d="M973 943C1030 943 1050 935 1050 885V440C1050 390 1038 360 1060 360C1090 360 1090 400 1070 400" fill="none" stroke="#0d120e" stroke-width="14"/><path d="M973 943C1030 943 1050 935 1050 885V440C1050 390 1038 360 1060 360C1090 360 1090 400 1070 400" fill="none" stroke="#77776a" stroke-width="2" opacity=".55"/></svg>
+      <div id="led-module" class="sequencer-module" aria-label="Raised sequencer module, 150 by 24 by 14 millimeters plus a 1 millimeter mounting pad; estimated photo scale">
+        <img class="led-face" src="sequencer-module.svg" alt="Sixteen 3 mm red LEDs at 8 mm pitch in a raised bezel with two screws">
+        <div id="sequence-leds" class="sequence-leds" aria-label="Sequencer step LEDs"></div>
+        <img class="led-board" src="sequencer-pcb.svg" alt="144 by 18 mm PCB showing LED pads, mounting keepouts, underside driver and six-pin connector">
+      </div>
+      <span class="hardware-led spare-led" title="Spare LED — unassigned"></span>
+      <span id="record-led" class="hardware-led record-led" title="Record LED"></span>
+      <span id="play-led" class="hardware-led play-led" title="Play LED"></span>
+      <span id="power-led" class="hardware-led power-led" title="Power LED"></span>
+      <div id="selector-assembly" class="selector-assembly">
+        <img class="selector-track-image" src="easa-phone-straightened.png" alt="" draggable="false">
+        <span class="selector-plate"><img src="easa-phone-straightened.png" alt="" draggable="false"></span>
+        <input id="front-selector" class="front-selector" type="range" min="0" max="2" step="1" value="2" aria-label="Front selector: left tape, sequencer, right tape" title="Left tape / SEQ / Right tape — proposed assignment">
+      </div>
+      <input id="side-selector" class="hardware-selector side-selector" type="range" min="0" max="2" step="1" value="1" aria-label="Side three-position switch, unassigned" title="Side switch — three positions, unassigned">
+      <input id="side-binary" class="side-binary" type="checkbox" aria-label="Side two-position switch, unassigned" title="Side switch — two positions, unassigned">
+      <input id="volume" class="side-volume" type="range" min="0" max="1" step="0.01" value="0.75" aria-label="Speaker volume" title="Speaker volume">
+      <button id="power-jack" class="rear-jack power-jack" aria-label="Power connection" title="Power connection" disabled></button>
+      <button id="midi-jack" class="rear-jack midi-jack" aria-label="MIDI input, proposed connector" title="MIDI input — proposed connector"></button>
+      <button id="mic-jack" class="rear-jack mic-jack" aria-label="Microphone input connection" title="Microphone input" disabled></button>
+    <div class="transport">
+        <button id="record" aria-label="Record" aria-keyshortcuts="R" title="Record (R)" disabled>REC</button>
+        <button id="play" aria-label="Play" aria-keyshortcuts="Space" title="Play / loop (Space)" disabled>PLAY</button>
+        <button id="stop" aria-label="Stop" aria-keyshortcuts="S" title="Stop (S)" disabled>STOP</button>
+        <button id="sequence-cue" aria-label="CUE: next sequencer step" title="CUE: next step in SEQ mode" disabled>CUE</button>
+      </div></div>
+      <details class="fit-details"><summary>LED module · 150 × 24 × 15 mm mounted</summary>
+        <p>Raised above the lid: 144 × 18 × 1.6 mm PCB, 3 mm LEDs at 8 mm pitch, underside driver, two internal mounting screws and a six-wire connector. A 1 mm mounting pad is included in the displayed height.</p>
+        <label><input id="show-led-pcb" type="checkbox"> Show PCB and component space</label>
+        <p>Phone scale is estimated from a standard cassette. Exact KX-T1421 dimensions and hinge clearance are unverified. This occupies real lid area; it is not a flush LED strip.</p>
+        <a href="sequencer-layout.svg" target="_blank">Open dimensioned assembly drawing</a>
+        <img class="fit-drawing" src="sequencer-layout.svg" alt="Dimensioned PCB layout, component envelopes and 14 mm assembly depth, plus mounting pad">
+      </details>
+    </div>
+    <aside class="controls" aria-label="Audio and cassette controls">
+      <button id="power" disabled>Loading…</button>
+      <div class="readout"><span id="transport-led" class="led"></span><output id="transport-state" aria-live="polite">POWER OFF</output><output id="counter">00.00</output></div>
+      <div class="level-track" title="Output level"><div id="output-level"></div></div>
+      <p id="device-note" class="hint"></p>
+      <div class="deck-choice" role="group" aria-label="Select tape deck">
+        <button id="deck-left" aria-pressed="false" disabled><strong>LEFT</strong><span id="deck-left-state">POWER OFF</span></button>
+        <button id="deck-right" aria-pressed="true" disabled><strong>RIGHT</strong><span id="deck-right-state">POWER OFF</span></button>
+      </div>
+      <div class="both-transport"><button id="play-both" disabled>Play both</button><button id="stop-both" disabled>Stop both</button></div>
+      <p class="hint" id="selected-deck">Right deck</p>
+      <section id="sequencer-panel">
+        <h2>Sequencer <span id="sequence-position">STOPPED</span></h2>
+        <label class="seq-mode"><input id="sequence-mode" type="checkbox" disabled> SEQ controls</label>
+        <p class="hint">In SEQ: CUE moves one step · REC toggles it · PLAY runs · STOP stops. LEFT / RIGHT selects the track.</p>
+        <div class="seq-settings"><label>BPM <input id="sequence-bpm" type="number" min="30" max="240" value="120" disabled></label><label>Output <select id="sequence-target" disabled><option value="0">MIDI notes</option><option value="1">Tape gates</option><option value="2">MIDI + tape gates</option></select></label></div>
+        <div id="step-editor" class="step-editor" role="group" aria-label="Sixteen step bench editor"></div>
+        <div class="seq-settings"><label>Step <output id="sequence-cursor">1</output> · note <input id="sequence-note" aria-label="Selected step MIDI note" type="number" min="0" max="127" value="60" disabled></label><label><input id="sequence-enabled" type="checkbox" checked disabled> On</label></div>
+        <label class="seq-mode"><input id="test-instrument" type="checkbox" checked disabled> Hear virtual MIDI synth</label>
+        <details><summary>MIDI input / output</summary>
+          <p>Tracks send on MIDI channels 1 and 2. A keyboard enters notes at the selected step while stopped.</p>
+          <button id="midi-connect">Connect MIDI devices</button>
+          <label class="midi-port">IN <select id="midi-in"><option value="">None</option></select></label>
+          <label class="midi-port">OUT <select id="midi-out"><option value="">None</option></select></label>
+          <label><input id="sequence-clock" type="checkbox" disabled> Follow incoming MIDI clock</label>
+          <div class="seq-settings"><label>Test note <input id="midi-test-note" type="number" min="0" max="127" value="60"></label><button id="midi-test" disabled>Enter note</button></div>
+          <p id="midi-status" class="hint">No hardware connected.</p><output id="midi-monitor" class="midi-monitor">MIDI OUT —</output>
+        </details>
+      </section>
+      <section>
+        <h2>Audio input</h2>
+        <label id="drop" class="drop"><span>Load audio file</span><input id="audio-file" type="file" accept="audio/*" aria-label="Load audio file" disabled></label>
+        <p id="source-name">No file loaded</p><p id="source-description" class="hint">Drag an audio file here.</p>
+        <div class="source-progress"><div id="source-progress-bar"></div></div>
+        <p id="source-clock" class="hint"></p>
+        <div class="input-actions"><button id="cue" disabled>Rewind input</button><label><input id="repeat" type="checkbox" disabled>Repeat input</label></div>
+        <button id="mic" disabled>Use microphone</button>
+      </section>
+      <section>
+        <h2>Tape <span id="tape-length">6 SEC</span></h2>
+        <div class="tape-insert"><label for="custom-length">Seconds</label><input id="custom-length" type="number" min="0.000016" step="any" value="6" aria-label="Tape length in seconds"><button id="insert-tape" disabled>Insert</button></div>
+        <label class="library-label" for="tape-library">Saved tapes</label><select id="tape-library" disabled><option value="6">6s</option><option value="8">8s</option></select>
+        <div class="tapes" role="group" aria-label="Choose loop cassette"><button id="tape6" class="selected" aria-pressed="true" disabled>6 sec</button><button id="tape8" aria-pressed="false" disabled>8 sec</button></div>
+        <p id="swap-note" class="hint">Stop before swapping.</p>
+        <a id="export" class="download-button" role="button" aria-disabled="true" disabled>Export WAV</a>
+        <p id="storage-status" class="hint">Recordings save in this browser after Stop.</p>
+      </section>
+      <p id="notice" role="status" aria-live="polite"></p>
+      <details><summary>Audio &amp; MIDI connections</summary>
+        <p>MIDI IN → step entry / clock → sequencer → MIDI OUT → synth or drum machine.</p>
+        <p>Audio IN → selected tape recording. Tape heads → playback amplifiers → audio gates → mix → Audio OUT. Both tapes keep moving when gated.</p>
+        <p>Proposed rear panel: four 3.5 mm sockets, MIDI IN / OUT (TRS Type A) and mono AUDIO IN / OUT. Allow an 18 × 8 × 12.3 mm jack body, 16 mm spacing and 22 mm clearance behind the panel per socket. Panel strip: 80 × 18 mm minimum; plug and case clearance still need checking.</p>
+        <svg viewBox="0 0 80 27" class="io-panel" role="img" aria-label="Proposed 80 by 18 millimeter rear connector strip: MIDI in, MIDI out, audio in, audio out"><rect x="0.5" y="0.5" width="79" height="17" rx="1" fill="#b5ad94" stroke="#665f4e"/><g fill="#171916" stroke="#6c6d60" stroke-width="1"><circle cx="16" cy="8" r="2.5"/><circle cx="32" cy="8" r="2.5"/><circle cx="48" cy="8" r="2.5"/><circle cx="64" cy="8" r="2.5"/></g><g fill="#ddd" font-size="3" text-anchor="middle"><text x="16" y="23">MIDI IN</text><text x="32" y="23">MIDI OUT</text><text x="48" y="23">AUDIO IN</text><text x="64" y="23">AUDIO OUT</text></g></svg>
+        <p>The two codec inputs switch between line input while recording and head returns while playing. Tape gates need a separate analog circuit after playback; MIDI sockets need the proper input isolator and output driver. This is a wiring proposal, not a measured Panasonic PCB fit.</p>
+      </details>
+      <details><summary>Details</summary>
+        <p>Click either cassette or its LEFT / RIGHT button to select a deck. The front REC / PLAY / STOP keys, audio input and tape controls apply to that deck. Play both / Stop both operate both decks. R: Record · S: Stop · Space: Play.</p>
+        <p>The 16 LEDs show the selected track: dim red marks enabled steps; bright red marks the playing step. The outlined bench step is the edit cursor. The bench editor is a virtual tool; the lid module only contains LEDs. Expand LED module below the machine for the PCB footprint and depth drawing.</p>
+        <p>Recording replaces tape audio. Files stop recording when they finish; Repeat input keeps them running. Short clips leave silence in the rest of the loop. Use headphones with the microphone.</p>
+        <p>Runs the AnsaLoop ARM firmware in Virtual Daisy, using a fast linear tape model. The separate circuit lab runs ngspice. Panasonic electrical parameters are not measured yet.</p>
+        <p>One ARM firmware image controls both virtual transports and the sequencer. GPIO contacts control REC / PLAY / STOP / CUE. MIDI uses the emulated 31,250-baud UART. The virtual MIDI synth is an external test receiver. The front selector is provisionally left tape / SEQ / right tape; side switches and spare LED remain unassigned. Independent physical operation of the Panasonic mechanisms is not verified yet.</p>
+        <p>Audio stays on this computer. Tapes save after stopping and on Power off. Export recordings you want to keep.</p>
+        <p id="engine-status"></p>
+        <p><a href="https://github.com/UnitedCode/virtual-ansaloop" target="_blank" rel="noopener">Interface source</a> · <a href="https://github.com/UnitedCode/ansaloop" target="_blank" rel="noopener">Firmware and circuits</a></p>
+        <p><a href="easa-phone-kx-t1421.jpg" target="_blank">Original photo</a> · <a href="https://www.ebay.com/itm/316383651565" target="_blank" rel="noopener">Photo source</a>. The straightened view and cassette artwork use this photo as their reference.</p>
+      </details>
+    </aside>
+  </div>
+</main><script type="module">import init, {start_ui} from './ansaloop.js'; try {await init(); start_ui();} catch(e) {document.getElementById('notice').textContent='Could not start: '+e;}</script></body>
+</html>
