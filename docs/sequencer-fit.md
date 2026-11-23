@@ -38,8 +38,9 @@ This raised design assumes no available cavity underneath the lid.
 - [JST SH drawing](https://www.jst-mfg.com/product/pdf/eng/eSH.pdf): six-position SM06B-SRSS-TB, 1 mm pitch, approximately 8 × 4.2 mm side-entry package and 2.9 mm height. The proposal reserves additional perimeter and cable space.
 
 Driver current, actual brightness through the lid, power supply, EMI/noise and
-firmware pin allocation remain to be designed. Four LEDs are lit in the static
-preview solely to show lens appearance. No working sequencer is implied.
+firmware pin allocation remain to be designed. The browser overlays firmware
+pattern and playhead state on these lens positions; it does not add physical
+step buttons. The actual TLC59282 GPIO/serial driver is not implemented yet.
 
 ## Panasonic scale and remaining uncertainty
 

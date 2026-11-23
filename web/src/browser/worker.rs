@@ -63,7 +63,7 @@ fn deck_status(r: &Runtime, id: DeckId) -> Object {
     set(&o, "catalog", catalog);
     o
 }
-fn status(r: &Runtime, diagnostics: Option<&JsValue>) {
+fn status(r: &mut Runtime, diagnostics: Option<&JsValue>) {
     let o = deck_status(r, r.active);
     set(&o, "kind", "status");
     set(&o, "sha", EXPECTED_SHA);
@@ -73,6 +73,25 @@ fn status(r: &Runtime, diagnostics: Option<&JsValue>) {
         decks.push(&deck_status(r, id));
     }
     set(&o, "decks", decks);
+    if let Ok(s) = r.engine.sequence_state() {
+        let seq = Object::new();
+        set(&seq, "running", s.running);
+        set(&seq, "step", s.step as u32);
+        set(&seq, "cursor", s.cursor as u32);
+        set(&seq, "bpm", s.bpm);
+        set(&seq, "target", s.target);
+        set(&seq, "external", s.external);
+        set(&seq, "overflow", s.overflow);
+        let masks = Array::new();
+        let notes = Array::new();
+        for t in 0..2 {
+            masks.push(&(s.masks[t] as u32).into());
+            notes.push(&Uint8Array::from(s.notes[t].as_slice()));
+        }
+        set(&seq, "masks", masks);
+        set(&seq, "notes", notes);
+        set(&o, "sequence", seq);
+    }
     if let Some(d) = diagnostics {
         for key in ["underruns", "recoveries", "queued", "captureDrops"] {
             set(&o, key, get(d, key));
@@ -119,7 +138,7 @@ fn audio(
     let mut r = runtime.borrow_mut();
     let tracks = r
         .engine
-        .render_tracks(&mic, number(data, "hz") as u32)
+        .render_monitor(&mic, number(data, "hz") as u32)
         .map_err(js_error)?;
     let n = tracks.len().max(1) as f64;
     r.levels = std::array::from_fn(|i| {
@@ -135,9 +154,16 @@ fn audio(
     set(&o, "audio", &samples);
     port.post_message_with_transferable(&o, &Array::of1(&samples.buffer()))?;
     r.blocks += 1;
+    let midi = r.engine.take_midi();
+    if !midi.is_empty() {
+        let o = packet("midi-out");
+        let bytes = Uint8Array::from(midi.iter().map(|v| v.1).collect::<Vec<_>>().as_slice());
+        set(&o, "bytes", bytes);
+        let _ = r.scope.post_message(&o);
+    }
     prepare_export(&mut r)?;
     if r.blocks.is_multiple_of(16) {
-        status(&r, Some(data));
+        status(&mut r, Some(data));
     }
     drop(r);
     save_if_stopped(runtime.clone());
@@ -226,15 +252,44 @@ pub async fn start_worker() -> Result<(), JsValue> {
             let id = DeckId::from_index(number(&data, "deck") as usize).map_err(js_error)?;
             match string(&data, "kind").as_str() {
                 "select" => r.active = id,
-                "record" => r.engine.press_deck(id, Button::Record),
-                "play" => r.engine.press_deck(id, Button::Play),
-                "stop" => r.engine.press_deck(id, Button::Stop),
+                "record" | "play" | "stop" => {
+                    r.engine
+                        .sequence_mode(get(&data, "sequenceMode").as_bool().unwrap_or(false), id)
+                        .map_err(js_error)?;
+                    let b = match string(&data, "kind").as_str() {
+                        "record" => Button::Record,
+                        "play" => Button::Play,
+                        _ => Button::Stop,
+                    };
+                    r.engine.press_deck(id, b);
+                }
+                "sequence-mode" => r
+                    .engine
+                    .sequence_mode(get(&data, "sequenceMode").as_bool().unwrap_or(false), id)
+                    .map_err(js_error)?,
+                "sequence-cue" => r.engine.cue_button().map_err(js_error)?,
+                "sequence-config" => r
+                    .engine
+                    .configure_sequence(
+                        number(&data, "command") as u8,
+                        &Uint8Array::new(&get(&data, "args")).to_vec(),
+                    )
+                    .map_err(js_error)?,
+                "midi-in" => r
+                    .engine
+                    .midi_input(&Uint8Array::new(&get(&data, "bytes")).to_vec())
+                    .map_err(js_error)?,
+                "test-instrument" => r
+                    .engine
+                    .test_instrument(get(&data, "enabled").as_bool().unwrap_or(false)),
                 "play-both" => {
+                    r.engine.sequence_mode(false, id).map_err(js_error)?;
                     for id in DeckId::ALL {
                         r.engine.press_deck(id, Button::Play);
                     }
                 }
                 "stop-both" => {
+                    r.engine.sequence_mode(false, id).map_err(js_error)?;
                     for id in DeckId::ALL {
                         r.engine.press_deck(id, Button::Stop);
                     }
@@ -263,6 +318,10 @@ pub async fn start_worker() -> Result<(), JsValue> {
                 "cue" => r.engine.rewind_source_deck(id),
                 "export" => r.export_key = None,
                 "shutdown" => {
+                    r.engine.sequence_mode(true, id).map_err(js_error)?;
+                    r.engine.press_deck(id, Button::Stop);
+                    r.engine.render(&[0.; 2048], 62500).map_err(js_error)?;
+                    r.engine.sequence_mode(false, id).map_err(js_error)?;
                     for id in DeckId::ALL {
                         r.engine.press_deck(id, Button::Stop);
                     }
@@ -294,7 +353,7 @@ pub async fn start_worker() -> Result<(), JsValue> {
                 _ => return Err(js_error("unknown interface message")),
             }
             prepare_export(&mut r)?;
-            status(&r, None);
+            status(&mut r, None);
             drop(r);
             save_if_stopped(state.clone());
             Ok(())
@@ -305,7 +364,7 @@ pub async fn start_worker() -> Result<(), JsValue> {
     });
     scope.set_onmessage(Some(callback.as_ref().unchecked_ref()));
     callback.forget();
-    status(&runtime.borrow(), None);
+    status(&mut runtime.borrow_mut(), None);
     send(&scope, "ready", EXPECTED_SHA);
     Ok(())
 }

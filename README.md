@@ -1,44 +1,46 @@
 # Virtual AnsaLoop
 
-Panasonic EASA-PHONE KX-T1421 tape prototype, running the actual Daisy ARM
-firmware in Virtual Daisy. This is a separate project from Virtual Synthphone.
+Panasonic EASA-PHONE KX-T1421 prototype: two tape loops and a 16-step MIDI
+sequencer, running real Daisy ARM firmware in Virtual Daisy. Separate from
+Virtual Synthphone. [Play online](https://unitedcode.github.io/virtual-ansaloop/).
 
-1. Power on. Click the **LEFT / RIGHT** button or cassette to select a deck.
-   Load an audio file for that deck, or use the microphone with headphones.
-2. Press **REC**. Input starts when the firmware brings the tape up to speed.
-3. Press **STOP**, then **PLAY** to loop the recording. A file sends Stop when
-   it ends; **Repeat input** keeps it running. Recording replaces tape audio.
-4. Stop and wait for the transport to settle. Enter any positive length in
-   seconds, including fractions, and press **Insert**. Choose **Saved tapes**
-   to return to an earlier cassette. Six and eight seconds are presets.
-5. Select the other deck and repeat. Both decks can play or record at once,
-   with separate audio and lengths. **Play both / Stop both** operate both;
-   the physical front keys and shortcuts operate the selected deck.
+## Try the sequencer
 
-**R** records, **S** stops, **Space** plays. Drag the whole front selector plate;
-its index line snaps under the three printed marks. Its function is unassigned.
-The side switches and spare LED remain unassigned. Both tape wells are active.
-Speaker volume changes the monitor output; MIDI input is planned.
+1. **Power on**, enable **SEQ controls**, then press the phone's **PLAY** key.
+   The default two-track pattern plays through **Hear virtual MIDI synth**.
+2. **CUE** advances the edit cursor. **REC** toggles that step; **STOP** stops
+   the sequence. LEFT / RIGHT selects the track, on MIDI channels 2 / 1.
+3. Select a step in the bench editor to change its note or enabled state.
+   Set BPM or choose **Tape gates** / **MIDI + tape gates** for rhythmic muting.
+4. To hear tape gates, disable SEQ controls, **Play both** recorded tapes, then
+   enable SEQ and press PLAY. Tapes keep moving; the gates only change the mix.
+5. Expand **MIDI input / output** for optional hardware ports. Nothing is
+   connected automatically. A keyboard enters notes while stopped; incoming
+   clock can drive the sequence. **Enter note** tests the same UART input path.
 
-The sequencer preview uses a proposed **150 × 24 × 14 mm raised module** plus
-a **1 mm mounting pad**. It contains a 144 × 18 × 1.6 mm PCB, sixteen 3 mm LEDs
-on 8 mm centers, driver, connector and internal fasteners. Expand **LED module**
-under the photo to show the PCB and dimensioned drawing. Four static LEDs are
-lit; there is no sequencer behavior yet. Photo scale is estimated from cassette
-size; exact KX-T1421 dimensions, lid structure and hinge clearance are unverified.
-[Component drawings and fit assumptions](docs/sequencer-fit.md).
+The whole front selector plate moves and snaps under the printed marks.
+Proposed assignment: **left tape / SEQ / right tape**. The bench's 16 buttons
+are editing tools, not added physical buttons. The lid module contains only
+LEDs. Sequence patterns reset to the demo on power cycling; tape libraries save.
 
-Audio is decoded locally, mixed to mono and resampled. Nothing is uploaded.
-Each deck's tapes and inserted length save in this browser after stopping and on Power
-off. Export important recordings as WAV. Closing while recording can lose
-unsaved changes. Storage errors are shown; damaged records are retained rather
-than overwritten. The original single-deck library remains on the right deck;
-the left deck uses separate keys. There is one cassette per length **per deck**,
-rounded to a 62,500 Hz sample. Both libraries share a 256 MiB sample budget; source audio shares a separate
-128 MiB decoded mono budget and a 100 MB encoded-file limit. These protect
-browser memory; tape durations are not restricted to presets or whole seconds.
+## Record tape loops
 
-## Run
+Power on and disable SEQ controls. Choose LEFT / RIGHT, load audio or enable
+the microphone with headphones. REC records; STOP then PLAY loops the tape.
+Recording replaces existing audio. Repeat input keeps a short source running.
+**R / S / Space** mirror the front keys; **Right arrow** mirrors CUE.
+
+Stop the selected deck and wait for it to settle, then enter any positive tape
+length, including fractions, and press Insert. Saved tapes retain one cassette
+per sample-rounded length per deck. Both decks can play or record independently.
+Speaker volume affects monitoring, not recorded media or WAV exports.
+
+Audio stays local. Libraries save after stopping and on Power off. Export
+important recordings; closing during recording can lose unsaved changes. The
+original library remains on the right; left uses separate IndexedDB keys.
+Tapes share 256 MiB; decoded mono sources share 128 MiB, with a 100 MB file limit.
+
+## Run and verify
 
 Install Rust targets `wasm32-unknown-unknown` and `thumbv7em-none-eabihf`, plus
 `wasm-bindgen-cli` **0.2.127**. Reuse a compatible `CARGO_TARGET_DIR`.
@@ -50,47 +52,41 @@ cargo run --release -p xtask -- build
 cargo run --release -p xtask -- serve
 ```
 
-Open `http://127.0.0.1:3030`. Inspect preview ownership first and stop the server
-after verification. `dist/` works on HTTPS static hosting without a backend.
-The tracked `.openai/hosting.json` identifies the existing private Site. Current
-development is local-only at the user's request; do not publish updates.
+Open `http://127.0.0.1:3030`. Check preview ownership first; stop owned servers
+after verification. The public website uses GitHub Pages from prebuilt files on
+`gh-pages`, with `.nojekyll`. Build locally and publish only a verified source
+revision. GitHub performs hosting deployment; it does not compile Rust. The old
+private Sites project is retained but is not the publication target.
 
-## Firmware and model
+## What is simulated
 
-The current ELF implements two independent transport controllers in one Daisy:
-`03f0fcd226c6406124c5cfc43690a3d5ea4b014ff87d52c9178a4b852895c497`.
-The engine verifies its hash before boot. Button presses are GPIO contacts;
-actual ARM instructions handle controls, interlocks and serial audio I/O.
-Virtual Daisy's opt-in functional runtime preserves instruction and peripheral
-behavior while omitting detailed CPU bus/cache timing. Its default timed runtime
-is unchanged. No host controller makes firmware decisions for this interface.
-Channel 0 carries the right deck; channel 1 carries the left. Separate recording
-signals are retained; the browser models a proposed equal-gain analog monitor
-mix. [Firmware source and provisional GPIO ABI](firmware/README.md) are included.
+One verified ARM ELF controls both transports, MIDI parsing, note generation,
+24-PPQN clock, CUE editing and post-codec tape-gate GPIO. Virtual Daisy executes
+the ARM instructions and peripherals in its functional mode; detailed bus/cache
+timing is omitted. There is no host sequencer or JavaScript instrument logic.
+The browser's virtual MIDI synth is a separate Rust test receiver listening to
+actual baud-paced USART output. Optional Web MIDI forwarding has browser/queue
+jitter; external equipment and live MIDI sync have not been physically tested.
 
-Live audio uses AnsaLoop's fast ideal linear tape carrier: 20 ms motor response,
-62,500 Hz codec, one-frame ADC latch and four-frame firmware FIFO. Resampling
-retains phase across audio packets. Bounded worklet queues report underruns,
-dropped capture and recovery. This browser does not run ngspice or model magnetic
-tape quality. The separate [AnsaLoop circuit lab](https://github.com/UnitedCode/ansaloop)
-contains coupled analog/ARM tests of the earlier single-deck probe; the new dual
-image has not been validated in that ngspice runner. Panasonic electrical parameters and the donor
-machine remain unmeasured. The firmware is a functional tape probe, not the
-finished board support package or sequencer.
+The browser uses the pinned AnsaLoop fast ideal linear tape carrier: synthetic
+20 ms motors, 62,500 Hz codec, one-frame ADC latch and four-frame firmware FIFO.
+GPIO gates model proposed post-playback analog switches with a 1 ms smoothing
+response; they do not alter recording signals or seek tapes. The separate
+[circuit lab](https://github.com/UnitedCode/ansaloop) runs ngspice with the earlier
+single-deck image; this sequencer image has not been coupled to ngspice.
 
-Rust implements the engine, UI, storage, routing and build tools. JavaScript is
-limited to browser module startup and the required AudioWorkletProcessor PCM
-bridge. HTML/CSS place controls over a photo-derived straightened view; the
-moving selector plate uses pixels from that same image.
+The raised LED module is **150 × 24 × 15 mm mounted**, including a
+144 × 18 × 1.6 mm PCB and 3 mm LEDs on 8 mm centers. Photo scale is estimated
+from a cassette. Exact case fit, hinge clearance, mechanism independence, head
+circuits and donor electrical parameters remain unmeasured. This is not the
+finished physical board support package. Expand the PCB drawing under the photo.
 
-[Artwork sources and generation prompts](docs/artwork.md) ·
-[Physical controls and current assignments](docs/hardware-inventory.md)
+- [Firmware, GPIO and UART protocol](firmware/README.md)
+- [Sequencer behavior and proposed connections](docs/sequencer.md)
+- [LED component drawings and fit assumptions](docs/sequencer-fit.md)
+- [Physical controls](docs/hardware-inventory.md) · [Artwork](docs/artwork.md)
 
-Rebuild this project's dual-deck firmware or regenerate the mechanical study:
-
-```sh
-cargo run --release -p xtask -- firmware
-cargo run --release -p xtask -- layout
-```
-
-Review the firmware ABI before deliberately changing the expected hash.
+`cargo run --release -p xtask -- firmware` rebuilds the ARM image; review its ABI
+and deliberately update the expected SHA256. `xtask layout` regenerates the
+dimensioned SVGs. Rust owns the engine, UI, storage and tools; JavaScript is
+limited to module startup and the mandatory AudioWorkletProcessor PCM bridge.

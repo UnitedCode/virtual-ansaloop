@@ -1,5 +1,6 @@
 use super::*;
 use virtual_ansaloop_engine::{EXPECTED_SHA, MAX_SOURCE_FRAMES};
+mod sequence;
 
 #[derive(Default)]
 struct Ui {
@@ -18,6 +19,7 @@ struct Ui {
     download_url: Option<String>,
     tape_seconds: f64,
     catalog: Vec<f64>,
+    sequence: sequence::View,
 }
 fn doc() -> Document {
     window().unwrap().document().unwrap()
@@ -39,7 +41,7 @@ fn disabled(id: &str, value: bool) {
 fn input(id: &str) -> HtmlInputElement {
     el(id).unchecked_into()
 }
-fn front_position(value: f64) {
+fn front_position(state: &Rc<RefCell<Ui>>, value: f64) {
     let value = value.round().clamp(0., 2.);
     input("front-selector").set_value(&value.to_string());
     let _ = el("selector-assembly")
@@ -47,18 +49,18 @@ fn front_position(value: f64) {
         .style()
         .set_property("--position", &value.to_string());
     let _ = el("front-selector").set_attribute("data-position", &(value as u32 + 1).to_string());
-    text(
-        "notice",
-        &format!(
-            "Front selector: position {} (unassigned).",
-            value as u32 + 1
-        ),
-    );
+    input("sequence-mode").set_checked(value == 1.);
+    if value != 1. {
+        state.borrow_mut().active = if value == 0. { 1 } else { 0 };
+        send(state, "select");
+    }
+    send(state, "sequence-mode");
 }
 fn send(state: &Rc<RefCell<Ui>>, kind: &str) {
     if let Some(w) = &state.borrow().worker {
         let o = packet(kind);
         set(&o, "deck", state.borrow().active as u32);
+        set(&o, "sequenceMode", input("sequence-mode").checked());
         let _ = w.post_message(&o);
     }
 }
@@ -82,6 +84,7 @@ fn stop_mic(state: &mut Ui) {
     text("mic", "Use microphone");
 }
 fn off(state: &Rc<RefCell<Ui>>) {
+    sequence::power(state, false);
     let mut s = state.borrow_mut();
     s.ready = false;
     s.power_pending = false;
@@ -165,6 +168,7 @@ fn off(state: &Rc<RefCell<Ui>>) {
     }
 }
 fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
+    sequence::update(state, &get(data, "sequence"));
     let decks = Array::from(&get(data, "decks"));
     for (i, d) in decks.iter().enumerate() {
         state.borrow_mut().mic_decks[i] = get(&d, "microphone").as_bool().unwrap_or(false);
@@ -413,6 +417,29 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
     if state.borrow().ready {
         disabled("export", !can_swap);
     }
+    if input("sequence-mode").checked() {
+        let seq = get(data, "sequence");
+        let running = get(&seq, "running").as_bool().unwrap_or(false);
+        text(
+            "transport-state",
+            if running {
+                "SEQ PLAYING"
+            } else {
+                "SEQ STOPPED"
+            },
+        );
+        text(
+            "counter",
+            &format!("{:02}/16", number(&seq, "step") as u32 + 1),
+        );
+        for (id, on) in [("play", running), ("stop", !running), ("record", false)] {
+            let _ = el(id).class_list().toggle_with_force("active", on);
+        }
+        let _ = el("play-led").class_list().toggle_with_force(
+            "on",
+            running || decks.iter().any(|d| string(&d, "state") == "Playing"),
+        );
+    }
 }
 fn connect_audio(state: &Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     let s = state.borrow();
@@ -477,6 +504,9 @@ fn connect_audio(state: &Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     let o = packet("select");
     set(&o, "deck", s.active as u32);
     let _ = s.worker.as_ref().unwrap().post_message(&o);
+    drop(s);
+    sequence::power(state, true);
+    send(state, "sequence-mode");
     text("notice", "");
     Ok(())
 }
@@ -500,6 +530,7 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
                 }
             }
             "status" => update_status(&s, &data),
+            "midi-out" => sequence::midi_out(&s, &Uint8Array::new(&get(&data, "bytes")).to_vec()),
             "notice" => text("notice", &string(&data, "text")),
             "storage" => text("storage-status", &string(&data, "text")),
             "warning" => {
@@ -750,6 +781,7 @@ pub fn start_ui() {
         ("stop", "stop"),
         ("play", "play"),
         ("cue", "cue"),
+        ("sequence-cue", "sequence-cue"),
         ("play-both", "play-both"),
         ("stop-both", "stop-both"),
     ] {
@@ -837,8 +869,8 @@ pub fn start_ui() {
     bind(el("midi-jack").as_ref(), "click", move |_| {
         text(
             "notice",
-            "MIDI input is planned. This tape firmware does not use MIDI yet.",
-        )
+            "Open MIDI input / output in the sequencer panel to choose devices.",
+        );
     });
     for (id, deck) in [
         ("primary-slot", 0),
@@ -857,6 +889,7 @@ pub fn start_ui() {
             disabled("export", true);
             let _ = el("export").remove_attribute("href");
             send(&s, "select");
+            send(&s, "sequence-mode");
         });
     }
     let s = state.clone();
@@ -880,11 +913,13 @@ pub fn start_ui() {
             }
         }
     });
+    let s = state.clone();
     bind(el("front-selector").as_ref(), "input", move |_| {
-        front_position(input("front-selector").value_as_number())
+        front_position(&s, input("front-selector").value_as_number())
     });
     let drag = Rc::new(RefCell::new(None::<(i32, f64)>));
     let d = drag.clone();
+    let s = state.clone();
     bind(el("front-selector").as_ref(), "pointerdown", move |e| {
         e.prevent_default();
         let p: PointerEvent = e.unchecked_into();
@@ -899,7 +934,10 @@ pub fn start_ui() {
             e.prevent_default();
             let p: PointerEvent = e.unchecked_into();
             let scale = el("device-view").get_bounding_client_rect().width() / 1230.;
-            front_position(value + f64::from(p.client_x() - start) / (22. * scale).max(0.1));
+            front_position(
+                &s,
+                value + f64::from(p.client_x() - start) / (22. * scale).max(0.1),
+            );
         }
     });
     for event in ["pointerup", "pointercancel", "lostpointercapture"] {
@@ -964,9 +1002,11 @@ pub fn start_ui() {
             "r" => "record",
             "s" => "stop",
             " " => "play",
+            "arrowright" => "sequence-cue",
             _ => return,
         };
         event.prevent_default();
         send(&s, kind);
     });
+    sequence::init(&state);
 }
