@@ -9,7 +9,8 @@ struct Ui {
     stream: Option<MediaStream>,
     source: Option<MediaStreamAudioSourceNode>,
     ready: bool,
-    source_name: String,
+    active: usize,
+    mic_decks: [bool; 2],
     mic_pending: bool,
     power_pending: bool,
     volume: f32,
@@ -56,7 +57,9 @@ fn front_position(value: f64) {
 }
 fn send(state: &Rc<RefCell<Ui>>, kind: &str) {
     if let Some(w) = &state.borrow().worker {
-        let _ = w.post_message(&packet(kind));
+        let o = packet(kind);
+        set(&o, "deck", state.borrow().active as u32);
+        let _ = w.post_message(&o);
     }
 }
 fn warning(error: JsValue) {
@@ -67,6 +70,7 @@ fn warning(error: JsValue) {
     web_sys::console::warn_1(&error);
 }
 fn stop_mic(state: &mut Ui) {
+    state.mic_decks = [false; 2];
     if let Some(stream) = state.stream.take() {
         for track in stream.get_tracks().iter() {
             track.unchecked_into::<MediaStreamTrack>().stop();
@@ -111,6 +115,11 @@ fn off(state: &Rc<RefCell<Ui>>) {
         "tape6",
         "tape8",
         "primary-slot",
+        "secondary-slot",
+        "deck-left",
+        "deck-right",
+        "play-both",
+        "stop-both",
         "insert-tape",
         "tape-library",
     ] {
@@ -139,7 +148,9 @@ fn off(state: &Rc<RefCell<Ui>>) {
         .set_property("width", "0%");
     text("swap-note", "Power on before inserting a tape.");
     text("device-note", "Power on to begin.");
-    s.source_name.clear();
+    for id in ["deck-left-state", "deck-right-state"] {
+        text(id, "POWER OFF");
+    }
     text("source-name", "No file loaded");
     text("source-description", "Drag an audio file here.");
     text("source-clock", "");
@@ -154,6 +165,105 @@ fn off(state: &Rc<RefCell<Ui>>) {
     }
 }
 fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
+    let decks = Array::from(&get(data, "decks"));
+    for (i, d) in decks.iter().enumerate() {
+        state.borrow_mut().mic_decks[i] = get(&d, "microphone").as_bool().unwrap_or(false);
+        let side = if i == 0 { "right" } else { "left" };
+        text(
+            &format!("deck-{side}-state"),
+            &format!(
+                "{} · {:.2}s / {}s",
+                string(&d, "state").to_uppercase(),
+                number(&d, "position"),
+                number(&d, "seconds")
+            ),
+        );
+        let card = el(&format!("deck-{side}"));
+        let _ = card.set_attribute("data-gpio", &format!("{}", number(&d, "gpio") as u16));
+        let _ = card.set_attribute("data-written", &format!("{}", number(&d, "written") as u64));
+        let _ = card.set_attribute("data-output-level", &number(&d, "level").to_string());
+        let _ = card.set_attribute(
+            "aria-pressed",
+            if state.borrow().active == i {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        let _ = card.set_attribute("data-position", &number(&d, "position").to_string());
+        text(
+            if i == 0 {
+                "cassette-number"
+            } else {
+                "cassette-number-left"
+            },
+            &format!("{}s", number(&d, "seconds")),
+        );
+        for reel in if i == 0 {
+            ["reel-left", "reel-right"]
+        } else {
+            ["reel-left-b", "reel-right-b"]
+        } {
+            let _ = el(reel)
+                .unchecked_into::<HtmlElement>()
+                .style()
+                .set_property(
+                    "transform",
+                    &format!("rotate({}deg)", number(&d, "position") * 180.),
+                );
+        }
+    }
+    for (id, on) in [
+        (
+            "record-led",
+            decks.iter().any(|d| string(&d, "state") == "Recording"),
+        ),
+        (
+            "play-led",
+            decks.iter().any(|d| string(&d, "state") == "Playing"),
+        ),
+    ] {
+        if on {
+            let _ = el(id).class_list().add_1("on");
+        } else {
+            let _ = el(id).class_list().remove_1("on");
+        }
+    }
+    if number(data, "deck") as usize != state.borrow().active {
+        return;
+    }
+    let side = if state.borrow().active == 0 {
+        "Right"
+    } else {
+        "Left"
+    };
+    text("selected-deck", &format!("{side} deck"));
+    let name = string(data, "sourceName");
+    text(
+        "source-name",
+        if name.is_empty() {
+            "No file loaded"
+        } else {
+            &name
+        },
+    );
+    text(
+        "source-description",
+        if name.is_empty() {
+            "Drag an audio file here."
+        } else {
+            ""
+        },
+    );
+    input("repeat").set_checked(get(data, "repeat").as_bool().unwrap_or(false));
+    text(
+        "mic",
+        if get(data, "microphone").as_bool() == Some(true) {
+            "Microphone on"
+        } else {
+            "Use microphone"
+        },
+    );
     let snapshot = string(data, "state");
     let seconds = number(data, "seconds");
     let changed = state.borrow().tape_seconds != seconds;
@@ -184,29 +294,16 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
     let position = number(data, "position");
     text("counter", &format!("{position:05.2}"));
     text("tape-length", &format!("{seconds} SEC"));
-    text("cassette-number", &format!("{seconds}s"));
-    for (id, on) in [
-        ("record-led", snapshot == "Recording"),
-        ("play-led", snapshot == "Playing"),
-        ("power-led", state.borrow().ready),
-    ] {
-        let list = el(id).class_list();
-        if on {
+    {
+        let list = el("power-led").class_list();
+        if state.borrow().ready {
             let _ = list.add_1("on");
         } else {
             let _ = list.remove_1("on");
         }
     }
-    disabled("primary-slot", !can_swap);
     disabled("insert-tape", !can_swap);
     disabled("tape-library", !can_swap);
-    let angle = position * 180.;
-    for id in ["reel-left", "reel-right"] {
-        let _ = el(id)
-            .unchecked_into::<HtmlElement>()
-            .style()
-            .set_property("transform", &format!("rotate({angle}deg)"));
-    }
     let _ = el("transport-led").set_attribute(
         "class",
         if snapshot == "Recording" {
@@ -278,6 +375,8 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
                 }
             ),
         );
+    } else {
+        text("source-clock", "");
     }
     let _ = el("source-progress-bar")
         .unchecked_into::<HtmlElement>()
@@ -305,7 +404,7 @@ fn update_status(state: &Rc<RefCell<Ui>>, data: &JsValue) {
     );
     let _ = el("transport-state")
         .set_attribute("data-frames", &format!("{}", number(data, "frames") as u64));
-    let level = number(data, "level");
+    let level = number(data, "mixLevel");
     let _ = el("transport-state").set_attribute("data-output-level", &format!("{level}"));
     let _ = el("output-level")
         .unchecked_into::<HtmlElement>()
@@ -361,6 +460,12 @@ fn connect_audio(state: &Rc<RefCell<Ui>>) -> Result<(), JsValue> {
         "tape8",
         "insert-tape",
         "tape-library",
+        "primary-slot",
+        "secondary-slot",
+        "deck-left",
+        "deck-right",
+        "play-both",
+        "stop-both",
     ] {
         disabled(id, false);
     }
@@ -369,6 +474,9 @@ fn connect_audio(state: &Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     let _ = el("power-jack").set_attribute("aria-pressed", "true");
     text("power", "Power off");
     let _ = el("power").class_list().add_1("on");
+    let o = packet("select");
+    set(&o, "deck", s.active as u32);
+    let _ = s.worker.as_ref().unwrap().post_message(&o);
     text("notice", "");
     Ok(())
 }
@@ -409,6 +517,9 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
             }
             "off" => off(&s),
             "export" => {
+                if number(&data, "deck") as usize != s.borrow().active {
+                    return;
+                }
                 let bytes = Uint8Array::new(&get(&data, "bytes"));
                 let properties = BlobPropertyBag::new();
                 properties.set_type("audio/wav");
@@ -418,7 +529,15 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
                     Ok(url) => {
                         let anchor: HtmlAnchorElement = el("export").unchecked_into();
                         anchor.set_href(&url);
-                        anchor.set_download(&format!("ansaloop-{}s.wav", number(&data, "seconds")));
+                        anchor.set_download(&format!(
+                            "ansaloop-{}-{}s.wav",
+                            if number(&data, "deck") == 0. {
+                                "right"
+                            } else {
+                                "left"
+                            },
+                            number(&data, "seconds")
+                        ));
                         if let Some(old) = s.borrow_mut().download_url.replace(url) {
                             let release = Closure::<dyn FnMut()>::once(move || {
                                 let _ = Url::revoke_object_url(&old);
@@ -454,6 +573,7 @@ async fn power_on(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     Ok(())
 }
 async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> {
+    let deck = state.borrow().active;
     if file.size() > 100_000_000. {
         return Err(js_error("Choose an audio file under 100 MB."));
     }
@@ -489,30 +609,46 @@ async fn import_file(state: Rc<RefCell<Ui>>, file: File) -> Result<(), JsValue> 
     }
     let samples = Float32Array::from(mono.as_slice());
     let o = packet("source");
+    set(&o, "deck", deck as u32);
+    set(&o, "name", file.name());
     set(&o, "samples", &samples);
     set(&o, "hz", buffer.sample_rate());
     let mut s = state.borrow_mut();
+    if s.context.as_ref() != Some(&ctx) {
+        return Err(js_error("Instrument restarted while decoding."));
+    }
     let worker = s
         .worker
         .clone()
         .ok_or_else(|| js_error("Instrument powered off while decoding."))?;
-    stop_mic(&mut s);
-    s.source_name = file.name();
-    text("source-name", &s.source_name);
-    text(
-        "source-description",
-        &format!("{:.1} seconds", buffer.duration()),
-    );
+    s.mic_decks[deck] = false;
+    if !s.mic_decks.iter().any(|v| *v) {
+        stop_mic(&mut s);
+    }
     worker.post_message_with_transfer(&o, &Array::of1(&samples.buffer()))?;
     Ok(())
 }
 async fn microphone(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
+    let deck = state.borrow().active;
     let existing = state.borrow().stream.is_some();
+    if state.borrow().mic_decks[deck] {
+        let mut s = state.borrow_mut();
+        s.mic_decks[deck] = false;
+        if !s.mic_decks.iter().any(|v| *v) {
+            stop_mic(&mut s);
+        }
+        let o = packet("mic");
+        set(&o, "deck", deck as u32);
+        set(&o, "enabled", false);
+        s.worker.as_ref().unwrap().post_message(&o)?;
+        return Ok(());
+    }
     if existing {
         let mut s = state.borrow_mut();
-        stop_mic(&mut s);
+        s.mic_decks[deck] = true;
         let o = packet("mic");
-        set(&o, "enabled", false);
+        set(&o, "deck", deck as u32);
+        set(&o, "enabled", true);
         s.worker.as_ref().unwrap().post_message(&o)?;
         return Ok(());
     }
@@ -547,7 +683,9 @@ async fn microphone(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
     source.connect_with_audio_node(s.node.as_ref().unwrap())?;
     s.stream = Some(stream);
     s.source = Some(source);
+    s.mic_decks[deck] = true;
     let o = packet("mic");
+    set(&o, "deck", deck as u32);
     set(&o, "enabled", true);
     s.worker.as_ref().unwrap().post_message(&o)?;
     text("mic", "Microphone on");
@@ -559,6 +697,14 @@ async fn microphone(state: Rc<RefCell<Ui>>) -> Result<(), JsValue> {
 }
 #[wasm_bindgen]
 pub fn start_ui() {
+    bind(el("show-led-pcb").as_ref(), "change", move |_| {
+        let list = el("led-module").class_list();
+        if input("show-led-pcb").checked() {
+            let _ = list.add_1("pcb-view");
+        } else {
+            let _ = list.remove_1("pcb-view");
+        }
+    });
     let state = Rc::new(RefCell::new(Ui {
         volume: 0.75,
         tape_seconds: 6.,
@@ -604,6 +750,8 @@ pub fn start_ui() {
         ("stop", "stop"),
         ("play", "play"),
         ("cue", "cue"),
+        ("play-both", "play-both"),
+        ("stop-both", "stop-both"),
     ] {
         let s = state.clone();
         bind(el(id).as_ref(), "click", move |_| {
@@ -616,6 +764,7 @@ pub fn start_ui() {
         bind(el(id).as_ref(), "click", move |_| {
             if let Some(w) = &s.borrow().worker {
                 let o = packet("swap");
+                set(&o, "deck", s.borrow().active as u32);
                 set(&o, "seconds", seconds);
                 let _ = w.post_message(&o);
             }
@@ -625,6 +774,7 @@ pub fn start_ui() {
     bind(el("repeat").as_ref(), "change", move |_| {
         if let Some(w) = &s.borrow().worker {
             let o = packet("repeat");
+            set(&o, "deck", s.borrow().active as u32);
             set(&o, "enabled", input("repeat").checked());
             let _ = w.post_message(&o);
         }
@@ -684,22 +834,36 @@ pub fn start_ui() {
             text("notice", &format!("{name}: position {value} (unassigned)."));
         });
     }
-    bind(el("secondary-slot").as_ref(), "click", move |_| {
-        text("notice", "Second tape slot: unassigned.")
-    });
     bind(el("midi-jack").as_ref(), "click", move |_| {
         text(
             "notice",
             "MIDI input is planned. This tape firmware does not use MIDI yet.",
         )
     });
-    bind(el("primary-slot").as_ref(), "click", move |_| {
-        let _ = input("custom-length").focus();
-    });
+    for (id, deck) in [
+        ("primary-slot", 0),
+        ("secondary-slot", 1),
+        ("deck-right", 0),
+        ("deck-left", 1),
+    ] {
+        let s = state.clone();
+        bind(el(id).as_ref(), "click", move |_| {
+            {
+                let mut ui = s.borrow_mut();
+                ui.active = deck;
+                ui.tape_seconds = f64::NAN;
+                ui.catalog.clear();
+            }
+            disabled("export", true);
+            let _ = el("export").remove_attribute("href");
+            send(&s, "select");
+        });
+    }
     let s = state.clone();
     bind(el("insert-tape").as_ref(), "click", move |_| {
         if let Some(worker) = &s.borrow().worker {
             let o = packet("swap");
+            set(&o, "deck", s.borrow().active as u32);
             set(&o, "seconds", input("custom-length").value_as_number());
             let _ = worker.post_message(&o);
         }
@@ -710,6 +874,7 @@ pub fn start_ui() {
         if let Ok(seconds) = select.value().parse::<f64>() {
             if let Some(worker) = &s.borrow().worker {
                 let o = packet("swap");
+                set(&o, "deck", s.borrow().active as u32);
                 set(&o, "seconds", seconds);
                 let _ = worker.post_message(&o);
             }

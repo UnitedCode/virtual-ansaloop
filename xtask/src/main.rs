@@ -5,6 +5,7 @@ use std::{
     path::Path,
     process::Command,
 };
+mod layout;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn run(command: &mut Command) -> Result<()> {
     if !command.status()?.success() {
@@ -17,6 +18,7 @@ fn main() -> Result<()> {
     std::env::set_current_dir(root)?;
     match std::env::args().nth(1).as_deref() {
         Some("build") => {
+            layout::generate(root)?;
             run(Command::new("cargo").args([
                 "build",
                 "--release",
@@ -49,6 +51,9 @@ fn main() -> Result<()> {
                 "easa-phone-kx-t1421.jpg",
                 "easa-phone-straightened.png",
                 "endless-cassette.png",
+                "sequencer-module.svg",
+                "sequencer-pcb.svg",
+                "sequencer-layout.svg",
             ] {
                 fs::copy(root.join("assets").join(file), root.join("dist").join(file))?;
             }
@@ -96,6 +101,7 @@ fn main() -> Result<()> {
                             Some("wasm") => "application/wasm",
                             Some("jpg") | Some("jpeg") => "image/jpeg",
                             Some("png") => "image/png",
+                            Some("svg") => "image/svg+xml",
                             _ => "application/octet-stream",
                         };
                         ("200 OK", fs::read(p)?, mime)
@@ -134,11 +140,10 @@ fn main() -> Result<()> {
             writer.finalize()?;
             println!("{}", root.join(path).display());
         }
+        Some("layout") => {
+            layout::generate(root)?;
+        }
         Some("firmware") => {
-            let repo = std::env::args()
-                .nth(2)
-                .ok_or("supply the AnsaLoop firmware checkout")?;
-            let repo = Path::new(&repo).canonicalize()?;
             run(Command::new("rustc")
                 .args([
                     "--edition=2021",
@@ -154,21 +159,16 @@ fn main() -> Result<()> {
                 ])
                 .arg(format!(
                     "link-arg=-T{}",
-                    repo.join("firmware/tape.ld").display()
+                    root.join("firmware/tape.ld").display()
                 ))
-                .arg(repo.join("firmware/tape.rs"))
+                .arg(root.join("firmware/dual-tape.rs"))
                 .args(["-o", "firmware/ansaloop.elf"]))?;
             println!(
                 "ARM ELF SHA256: {}",
                 virtual_hash(&fs::read("firmware/ansaloop.elf")?)
             );
         }
-        _ => {
-            return Err(
-                "use: cargo run --release -p xtask -- build | serve | firmware /path/to/ansaloop"
-                    .into(),
-            )
-        }
+        _ => return Err("use: cargo run --release -p xtask -- build | serve | firmware".into()),
     }
     Ok(())
 }

@@ -10,12 +10,22 @@
   <div class="bench">
     <div class="device-column"><div class="photo-stage" id="device-view" aria-label="Panasonic KX-T1421 controls">
       <img class="device-photo" src="easa-phone-straightened.png" alt="Panasonic KX-T1421 reference view" draggable="false">
-      <button id="secondary-slot" class="well-target secondary" aria-label="Second tape slot, unassigned" title="Second tape slot — unassigned"></button>
-      <button id="primary-slot" class="well-target primary" aria-label="Swap cassette" title="Choose a tape length" disabled></button>
+      <button id="secondary-slot" class="well-target secondary" aria-label="Select left tape deck" title="Select left tape deck" disabled></button>
+      <button id="primary-slot" class="well-target primary" aria-label="Select right tape deck" title="Select right tape deck" disabled></button>
+      <div class="cassette cassette-left" aria-label="Left deck loop cassette">
+        <img src="endless-cassette.png" alt="Panasonic endless loop cassette" draggable="false">
+        <span class="tape-duration" id="cassette-number-left">8s</span>
+        <i class="reel" id="reel-left-b"></i><i class="reel second-reel" id="reel-right-b"></i>
+      </div>
       <div class="cassette" id="cassette" aria-label="Inserted virtual loop cassette">
         <img src="endless-cassette.png" alt="Panasonic endless loop cassette" draggable="false">
         <span class="tape-duration" id="cassette-number">6s</span>
         <i class="reel" id="reel-left"></i><i class="reel" id="reel-right"></i>
+      </div>
+      <svg class="lid-harness" viewBox="0 0 1230 1278" aria-label="Proposed six-wire cable route with a service loop at the lid hinge"><path d="M973 943C1030 943 1050 935 1050 885V440C1050 390 1038 360 1060 360C1090 360 1090 400 1070 400" fill="none" stroke="#0d120e" stroke-width="14"/><path d="M973 943C1030 943 1050 935 1050 885V440C1050 390 1038 360 1060 360C1090 360 1090 400 1070 400" fill="none" stroke="#77776a" stroke-width="2" opacity=".55"/></svg>
+      <div id="led-module" class="sequencer-module" aria-label="Raised sequencer module, 150 by 24 by 14 millimeters plus a 1 millimeter mounting pad; estimated photo scale">
+        <img class="led-face" src="sequencer-module.svg" alt="Sixteen 3 mm red LEDs at 8 mm pitch in a raised bezel with two screws; static preview">
+        <img class="led-board" src="sequencer-pcb.svg" alt="144 by 18 mm PCB showing LED pads, mounting keepouts, underside driver and six-pin connector">
       </div>
       <span class="hardware-led spare-led" title="Spare LED — unassigned"></span>
       <span id="record-led" class="hardware-led record-led" title="Record LED"></span>
@@ -32,17 +42,30 @@
       <button id="power-jack" class="rear-jack power-jack" aria-label="Power connection" title="Power connection" disabled></button>
       <button id="midi-jack" class="rear-jack midi-jack" aria-label="MIDI input, planned" title="MIDI input — proposed connector"></button>
       <button id="mic-jack" class="rear-jack mic-jack" aria-label="Microphone input connection" title="Microphone input" disabled></button>
-    </div><div class="transport">
+    <div class="transport">
         <button id="record" aria-label="Record" aria-keyshortcuts="R" title="Record (R)" disabled>REC</button>
         <button id="play" aria-label="Play" aria-keyshortcuts="Space" title="Play / loop (Space)" disabled>PLAY</button>
         <button id="stop" aria-label="Stop" aria-keyshortcuts="S" title="Stop (S)" disabled>STOP</button>
-      </div>
+      </div></div>
+      <details class="fit-details"><summary>LED module · 150 × 24 × 15 mm mounted</summary>
+        <p>Raised above the lid: 144 × 18 × 1.6 mm PCB, 3 mm LEDs at 8 mm pitch, underside driver, two internal mounting screws and a six-wire connector. A 1 mm mounting pad is included in the displayed height.</p>
+        <label><input id="show-led-pcb" type="checkbox"> Show PCB and component space</label>
+        <p>Phone scale is estimated from a standard cassette. Exact KX-T1421 dimensions and hinge clearance are unverified. This occupies real lid area; it is not a flush LED strip.</p>
+        <a href="sequencer-layout.svg" target="_blank">Open dimensioned assembly drawing</a>
+        <img class="fit-drawing" src="sequencer-layout.svg" alt="Dimensioned PCB layout, component envelopes and 14 mm assembly depth, plus mounting pad">
+      </details>
     </div>
     <aside class="controls" aria-label="Audio and cassette controls">
       <button id="power" disabled>Loading…</button>
       <div class="readout"><span id="transport-led" class="led"></span><output id="transport-state" aria-live="polite">POWER OFF</output><output id="counter">00.00</output></div>
       <div class="level-track" title="Output level"><div id="output-level"></div></div>
       <p id="device-note" class="hint"></p>
+      <div class="deck-choice" role="group" aria-label="Select tape deck">
+        <button id="deck-left" aria-pressed="false" disabled><strong>LEFT</strong><span id="deck-left-state">POWER OFF</span></button>
+        <button id="deck-right" aria-pressed="true" disabled><strong>RIGHT</strong><span id="deck-right-state">POWER OFF</span></button>
+      </div>
+      <div class="both-transport"><button id="play-both" disabled>Play both</button><button id="stop-both" disabled>Stop both</button></div>
+      <p class="hint" id="selected-deck">Right deck</p>
       <section>
         <h2>Audio input</h2>
         <label id="drop" class="drop"><span>Load audio file</span><input id="audio-file" type="file" accept="audio/*" aria-label="Load audio file" disabled></label>
@@ -63,10 +86,11 @@
       </section>
       <p id="notice" role="status" aria-live="polite"></p>
       <details><summary>Details</summary>
-        <p>R: Record · S: Stop · Space: Play.</p>
+        <p>Click either cassette or its LEFT / RIGHT button to select a deck. The front REC / PLAY / STOP keys, audio input and tape controls apply to that deck. Play both / Stop both operate both decks. R: Record · S: Stop · Space: Play.</p>
+        <p>The raised 16-LED module is a static physical layout preview. Four positions are lit to show spacing; sequencing is not implemented yet. Expand LED module below the machine for the PCB footprint and depth drawing.</p>
         <p>Recording replaces tape audio. Files stop recording when they finish; Repeat input keeps them running. Short clips leave silence in the rest of the loop. Use headphones with the microphone.</p>
         <p>Runs the AnsaLoop ARM firmware in Virtual Daisy, using a fast linear tape model. The separate circuit lab runs ngspice. Panasonic electrical parameters are not measured yet.</p>
-        <p>Three-position front selector, three-position and two-position side switches, spare LED, and the second tape slot are available for assignment. They do not change this tape firmware yet. Rear/side marker positions follow your annotations. Speaker volume controls the monitor output. MIDI input is planned.</p>
+        <p>One ARM firmware image controls two independent virtual transports, using one codec channel per deck. Both play into an equal-gain mono monitor mix. Independent physical operation of the Panasonic mechanisms is not verified yet. Front and side switches and spare LED remain unassigned. Speaker volume controls the monitor output. MIDI input is planned.</p>
         <p>Audio stays on this computer. Tapes save after stopping and on Power off. Export recordings you want to keep.</p>
         <p id="engine-status"></p>
         <p><a href="https://github.com/UnitedCode/virtual-ansaloop" target="_blank" rel="noopener">Interface source</a> · <a href="https://github.com/UnitedCode/ansaloop" target="_blank" rel="noopener">Firmware and circuits</a></p>
