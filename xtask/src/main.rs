@@ -45,6 +45,7 @@ fn main() -> Result<()> {
                 ]))?;
             for file in [
                 "index.html",
+                ".nojekyll",
                 "style.css",
                 "worker.js",
                 "audio-worklet.js",

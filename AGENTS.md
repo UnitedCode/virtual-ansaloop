@@ -16,7 +16,8 @@
   500 GB free space. Stop task-owned preview servers when verification ends.
 - Verify, commit, push and merge into main under the user's standing authority.
 - Reuse .openai/hosting.json identity. Keep the Site private unless asked otherwise.
-- The user requested local development and no further deployment. Do not publish
-  without a new request. GitHub verification, push and merge instructions remain.
+- The user authorized a public UnitedCode repository and public GitHub Pages site.
+  Publish prebuilt assets on gh-pages after local verification; avoid redundant CI
+  builds. Do not deploy the legacy private Sites project.
 - LED geometry must include the PCB, actual component envelopes, mounting and
   cable clearance. Label estimated photo scale and unmeasured donor clearance.

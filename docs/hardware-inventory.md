@@ -5,7 +5,7 @@ photo, 2026-11-22. These are owner observations, not electrical measurements.
 
 | Comment | Hardware | Prototype / planning status |
 | --- | --- | --- |
-| 1 | Front three-position selector | Position can be explored; function unassigned |
+| 1 | Front three-position selector | Proposed left tape / SEQ / right tape; moving index plate |
 | 2 | Power indicator | Shows virtual power / completed firmware boot |
 | 3 | Play indicator | Follows actual firmware playback state |
 | 4 | Record indicator | Follows actual firmware recording state |
@@ -15,13 +15,16 @@ photo, 2026-11-22. These are owner observations, not electrical measurements.
 | 8 | Side three-position switch | Position can be explored; function unassigned |
 | 9 | Side two-position switch | Position can be explored; function unassigned |
 | 10 | Power input | Virtual power connection; physical voltage/polarity unknown |
-| 11 | Two telephone connectors | Proposed replacements: MIDI input and microphone input |
+| 11 | Two telephone connectors | Reference locations; proposed four-jack MIDI IN/OUT and audio IN/OUT panel needs clearance checks |
 
-The microphone marker uses the existing virtual microphone route. MIDI remains
-planned: the current tape probe has no MIDI parser/sequencer. Do not label that
-port as operational MIDI. Switch movements have no assigned firmware behavior;
-the interface states that explicitly. LED displays are inferred from existing
-transport outputs, not claims of four implemented physical LED GPIO drivers.
+The fourth front key under CUE advances the sequencer edit cursor. In SEQ mode
+REC toggles a step, PLAY starts the sequence and STOP releases notes. LEFT / RIGHT
+selects its track. Outside SEQ, REC / PLAY / STOP operate the selected tape.
+MIDI parsing and sequencing run inside ARM via USART1. Optional Web MIDI ports
+are a browser bridge; physical MIDI input isolation/output drivers remain to be
+designed. The photo microphone marker uses the existing virtual microphone route.
+The side switches remain unassigned. LED displays follow firmware state; the
+physical TLC59282 LED driver and final GPIO allocation are not implemented yet.
 
 The dual-deck firmware/carrier implements two independent synthetic transports
 on one virtual Daisy. This is a proposed replacement design, not a claim that the

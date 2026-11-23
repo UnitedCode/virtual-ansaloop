@@ -8,7 +8,7 @@ use virtual_daisy::{
     machine::{Carrier, Machine},
 };
 pub const FIRMWARE: &[u8] = include_bytes!("../../firmware/ansaloop.elf");
-pub const EXPECTED_SHA: &str = "03f0fcd226c6406124c5cfc43690a3d5ea4b014ff87d52c9178a4b852895c497";
+pub const EXPECTED_SHA: &str = "517fd66b84c1a86edcd59e2d33c2f351ff35bf4beaa085ca9e69b0fdaf1a63a8";
 pub type Result<T> = std::result::Result<T, String>;
 pub const MAX_MEDIA_FRAMES: usize = 64 * 1024 * 1024;
 pub const MAX_SOURCE_FRAMES: usize = 32 * 1024 * 1024;
@@ -150,6 +150,8 @@ impl Tape {
         }
     }
 }
+mod sequencer;
+pub use sequencer::SequenceState;
 struct DualAttachment([Rc<RefCell<Deck>>; 2]);
 impl Carrier for DualAttachment {
     fn pins(&mut self, outputs: &[u16; 11], now: u64) -> [(u16, u16); 11] {
@@ -205,6 +207,12 @@ pub struct Engine {
     previous_output: [f32; 2],
     phase: f64,
     last_mic: f32,
+    monitor: [f32; 2],
+    previous_monitor: [f32; 2],
+    gate_gain: [f32; 2],
+    cue_release: u64,
+    serial: Vec<(u64, u8)>,
+    receiver: sequencer::Receiver,
     // Compatibility aliases for the original right-deck API.
     pub microphone: bool,
     pub repeat_source: bool,
@@ -232,6 +240,12 @@ impl Engine {
             previous_output: [0.; 2],
             phase: 0.,
             last_mic: 0.,
+            monitor: [0.; 2],
+            previous_monitor: [0.; 2],
+            gate_gain: [1.; 2],
+            cue_release: 0,
+            serial: Vec::new(),
+            receiver: Default::default(),
             microphone: false,
             repeat_source: false,
             dirty: false,
@@ -240,6 +254,75 @@ impl Engine {
     }
     pub fn press(&mut self, button: Button) {
         self.press_deck(DeckId::Right, button);
+    }
+    pub fn sequence_mode(&mut self, enabled: bool, track: DeckId) -> Result<()> {
+        self.machine
+            .drive_pin(1, 14, enabled)
+            .map_err(|e| e.to_string())?;
+        self.machine
+            .drive_pin(1, 15, track == DeckId::Left)
+            .map_err(|e| e.to_string())
+    }
+    pub fn cue_button(&mut self) -> Result<()> {
+        self.machine
+            .drive_pin(2, 12, true)
+            .map_err(|e| e.to_string())?;
+        self.cue_release = self.frame + 1250;
+        Ok(())
+    }
+    pub fn midi_input(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > 1024 {
+            return Err("MIDI packet too long".into());
+        }
+        self.machine
+            .receive_serial(bytes)
+            .map_err(|e| e.to_string())
+    }
+    /// Experimental non-commercial SysEx editor protocol, received by actual ARM UART.
+    pub fn configure_sequence(&mut self, command: u8, args: &[u8]) -> Result<()> {
+        if command > 127 || args.iter().any(|b| *b > 127) {
+            return Err("invalid MIDI data".into());
+        }
+        let mut bytes = vec![0xf0, 0x7d, command];
+        bytes.extend_from_slice(args);
+        bytes.push(0xf7);
+        self.midi_input(&bytes)
+    }
+    pub fn sequence_state(&mut self) -> Result<SequenceState> {
+        let mut v = [0; 10];
+        for (i, n) in v.iter_mut().enumerate() {
+            *n = self
+                .machine
+                .read32(0x20000020 + i as u32 * 4)
+                .map_err(|e| e.to_string())?;
+        }
+        let mut notes = [[0; 16]; 2];
+        for (t, track) in notes.iter_mut().enumerate() {
+            for (s, n) in track.iter_mut().enumerate() {
+                *n = self
+                    .machine
+                    .read32(0x20000060 + (t * 16 + s) as u32 * 4)
+                    .map_err(|e| e.to_string())? as u8;
+            }
+        }
+        Ok(SequenceState {
+            running: v[0] != 0,
+            step: v[1] as usize,
+            cursor: v[2] as usize,
+            bpm: v[3],
+            masks: [v[4] as u16, v[5] as u16],
+            target: v[6],
+            external: v[7] != 0,
+            track: v[8] as usize,
+            overflow: v[9],
+            notes,
+        })
+    }
+    pub fn take_midi(&mut self) -> Vec<(u64, u8)> {
+        std::mem::take(&mut self.serial)
+    }
+    pub fn test_instrument(&mut self, enabled: bool) {
+        self.receiver.enabled = enabled;
     }
     pub fn press_deck(&mut self, id: DeckId, button: Button) {
         self.tapes[id.index()].press(button, self.frame);
@@ -295,6 +378,12 @@ impl Engine {
         }
         self.adc = input;
         self.frame += 1;
+        if self.cue_release != 0 && self.frame >= self.cue_release {
+            self.machine
+                .drive_pin(2, 12, false)
+                .map_err(|e| e.to_string())?;
+            self.cue_release = 0;
+        }
         self.machine
             .run_until(self.frame * FRAME_NS, 20_000)
             .map_err(|e| e.to_string())?;
@@ -312,6 +401,19 @@ impl Engine {
                 self.dirty |= d.written != before;
             }
         }
+        for event in self.machine.take_serial() {
+            self.receiver.byte(event.1);
+            if self.serial.len() < 8192 {
+                self.serial.push(event);
+            }
+        }
+        let gpio = self.machine.read32(0x58020014).map_err(|e| e.to_string())?;
+        let synth = self.receiver.sample();
+        for i in 0..2 {
+            let target = if gpio & (1 << (8 + i)) != 0 { 1. } else { 0. };
+            self.gate_gain[i] += (target - self.gate_gain[i]) * 0.016;
+            self.monitor[i] = self.output[i] * self.gate_gain[i] + synth;
+        }
         if self.machine.read32(0x20000004).map_err(|e| e.to_string())? != 0 {
             return Err("ARM firmware exception".into());
         }
@@ -319,6 +421,18 @@ impl Engine {
     }
     /// Two codec channels: right deck on channel 0, left deck on channel 1.
     pub fn render_tracks(&mut self, mic: &[f32], device_hz: u32) -> Result<Vec<[f32; 2]>> {
+        self.render_output(mic, device_hz, false)
+    }
+    /// Proposed post-codec tape gates plus the external MIDI test instrument.
+    pub fn render_monitor(&mut self, mic: &[f32], device_hz: u32) -> Result<Vec<[f32; 2]>> {
+        self.render_output(mic, device_hz, true)
+    }
+    fn render_output(
+        &mut self,
+        mic: &[f32],
+        device_hz: u32,
+        monitor: bool,
+    ) -> Result<Vec<[f32; 2]>> {
         if !(8000..=192000).contains(&device_hz)
             || mic.len() > 4096
             || mic.iter().any(|v| !v.is_finite() || v.abs() > 1.)
@@ -337,12 +451,17 @@ impl Engine {
                 let fraction = ((n as f64 - old) / ratio) as f32;
                 let input = self.last_mic + (sample - self.last_mic) * fraction;
                 self.previous_output = self.output;
+                self.previous_monitor = self.monitor;
                 self.tick(input.clamp(-1., 1.))?;
             }
             self.phase -= count as f64;
             out.push(std::array::from_fn(|i| {
-                self.previous_output[i]
-                    + (self.output[i] - self.previous_output[i]) * self.phase as f32
+                let (before, now) = if monitor {
+                    (self.previous_monitor[i], self.monitor[i])
+                } else {
+                    (self.previous_output[i], self.output[i])
+                };
+                before + (now - before) * self.phase as f32
             }));
             self.last_mic = sample;
         }

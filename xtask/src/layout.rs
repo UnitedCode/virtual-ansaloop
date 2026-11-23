@@ -28,7 +28,7 @@ fn front() -> String {
     for i in 0..16 {
         let x = 3. + LED_X + i as f64 * LED_PITCH;
         let y = LED_Y + 3.;
-        let fill = if i % 4 == 0 { "url(#lens)" } else { "#421f1b" };
+        let fill = "#421f1b";
         write!(s,r##"<circle cx="{x}" cy="{y}" r="1.85" fill="#080b08" stroke="#635c49" stroke-width=".25"/><circle cx="{x}" cy="{y}" r="{}" fill="{fill}"/><ellipse cx="{}" cy="{}" rx=".5" ry=".27" fill="#efb4a0" opacity=".35"/><text x="{x}" y="15.5" text-anchor="middle" fill="#b8ae8f" font-size="2.2">{}</text>"##,LENS/2.,x-0.35,y-0.55,i+1).unwrap();
     }
     s.push_str(r##"<path d="M148 12h2v6h-2" fill="#080b08"/>"##);

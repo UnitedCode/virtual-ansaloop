@@ -15,8 +15,8 @@ header>span { font-size:14px; color:#aaa; }
 .device-column { position:relative; flex:none; width:min(59vw,calc((100dvh - 105px)*.96244),680px); }
 .photo-stage { position:relative; overflow:hidden; width:100%; aspect-ratio:1230/1278; border-radius:3px; isolation:isolate; }
 .device-photo { display:block; width:100%; height:100%; user-select:none; pointer-events:none; }
-.transport { position:absolute; left:58%; top:88%; width:24.5%; height:7.5%; display:flex; gap:2px; }
-.transport button { width:33.33%; min-width:0; padding:0; font:600 clamp(8px,1vw,12px)/1 ui-monospace,monospace; color:#302e26; border:1px solid #6b6759; border-radius:1px; background:#c6c3adb3; box-shadow:inset 0 1px 2px #f2eed685; opacity:.8; }
+.transport { position:absolute; left:58%; top:88%; width:32.6%; height:7.5%; display:flex; gap:2px; }
+.transport button { width:25%; min-width:0; padding:0; font:600 clamp(8px,1vw,12px)/1 ui-monospace,monospace; color:#302e26; border:1px solid #6b6759; border-radius:1px; background:#c6c3adb3; box-shadow:inset 0 1px 2px #f2eed685; opacity:.8; }
 .transport button:disabled { opacity:.3; }
 .transport button:hover:enabled { background:#f0d8aecc; opacity:1; }
 .transport button.active { border:2px solid #6d5b39; background:#dac28bc9; opacity:1; }
@@ -160,3 +160,23 @@ details a { color:#cdb38f; }
   .cassette-bottom { font-size:6px; }
   header>span { font-size:13px; }
 }
+.sequence-leds {position:absolute;inset:0;pointer-events:none;}
+.sequence-lamp {position:absolute;top:33.333%;width:1.94%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%);background:#401d18;box-shadow:inset 0 0 1px #000;}
+.sequence-lamp.enabled {background:#a63223;box-shadow:0 0 2px #c9462455;}
+.sequence-lamp.playing {background:#ffb59a;box-shadow:0 0 4px 1px #ff6333;}
+.sequence-lamp.cursor {outline:1px solid #d7ab6977;outline-offset:1px;}
+.pcb-view .sequence-leds {display:none;}
+.seq-mode {display:flex;gap:6px;align-items:center;font-size:13px;margin:8px 0;}
+.seq-settings {display:flex;gap:10px;align-items:center;justify-content:space-between;font-size:12px;margin:10px 0;}
+.seq-settings input[type=number] {width:62px;padding:4px;background:#303030;color:#ddd;border:1px solid #626262;}
+.seq-settings select {max-width:160px;}
+select {background:#303030;color:#ddd;border:1px solid #626262;border-radius:2px;padding:5px;font:inherit;}
+.step-editor {display:grid;grid-template-columns:repeat(8,1fr);gap:4px;}
+.step-editor button {padding:7px 0;font:12px/1.4 ui-monospace,monospace;min-width:0;background:#292929;color:#999;}
+.step-editor button.enabled {background:#593329;color:#f1be9b;border-color:#97674f;}
+.step-editor button.cursor {outline:2px solid #bc9a6b;outline-offset:0;}
+.step-editor button.playing {background:#c57b50;color:#16130f;}
+.midi-port {display:flex;gap:8px;align-items:center;margin:8px 0;}
+.midi-port select {width:100%;min-width:0;}
+.midi-monitor {display:block;font:11px/1.6 ui-monospace,monospace;color:#d2b895;overflow-wrap:anywhere;}
+.io-panel {display:block;width:100%;margin-top:12px;}

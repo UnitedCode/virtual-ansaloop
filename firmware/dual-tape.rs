@@ -3,6 +3,7 @@
 #![no_main]
 #[path = "control.rs"]
 mod control;
+mod sequencer;
 use control::{Command, Controller};
 use core::{
     arch::{asm, global_asm},
@@ -18,6 +19,8 @@ static mut CONTROL: [Controller; 2] = [Controller::new(), Controller::new()];
 static mut PREVIOUS: [u32; 2] = [0; 2];
 static mut TICKS: u32 = 0;
 static mut GATES: [u16; 2] = [0; 2];
+static mut SEQ: sequencer::Sequencer = sequencer::Sequencer::new();
+static mut CUE_HELD: bool = false;
 global_asm!(
     r#"
 .syntax unified
@@ -39,13 +42,49 @@ unsafe fn buttons(deck: usize) -> u32 {
 }
 #[no_mangle]
 pub unsafe extern "C" fn audio_irq() {
+    let seq = &mut *core::ptr::addr_of_mut!(SEQ);
+    for _ in 0..16 {
+        if read(0x4001101c) & 32 == 0 {
+            break;
+        }
+        seq.receive(read(0x40011024) as u8);
+    }
+    for _ in 0..2 {
+        if read(0x4001101c) & 128 == 0 {
+            break;
+        }
+        if let Some(b) = seq.pop() {
+            write(0x40011028, u32::from(b));
+        } else {
+            break;
+        }
+    }
     if TICKS & 15 == 0 {
         let c = read(0x58020810);
+        let selector = read(0x58020410);
+        let sequence_mode = selector & (1 << 14) != 0;
+        seq.track = usize::from(selector & (1 << 15) != 0);
+        let cue = c & (1 << 12) != 0;
+        if cue && !CUE_HELD && sequence_mode {
+            seq.cue();
+        }
+        CUE_HELD = cue;
         for deck in 0..2 {
             let b = buttons(deck);
             let rising = b & !PREVIOUS[deck];
             PREVIOUS[deck] = b;
-            let request = if rising & 4 != 0 {
+            if sequence_mode {
+                if rising & 4 != 0 {
+                    seq.stop(true);
+                } else if rising & 2 != 0 {
+                    seq.toggle();
+                } else if rising & 1 != 0 {
+                    seq.start(!seq.external);
+                }
+            }
+            let request = if sequence_mode {
+                None
+            } else if rising & 4 != 0 {
                 Some(Command::Stop)
             } else if rising & 2 != 0 {
                 Some(Command::Record)
@@ -73,10 +112,42 @@ pub unsafe extern "C" fn audio_irq() {
     // Full eight-word FIFO: four stereo frames per interrupt.
     if read(0x40015818) & 8 != 0 {
         for _ in 0..4 {
+            seq.sample();
             let left = read(0x40015820);
             let right = read(0x40015820);
             write(0x40015840, if GATES[0] & 3 == 3 { left } else { 0 });
             write(0x40015840, if GATES[1] & 3 == 3 { right } else { 0 });
+        }
+    }
+    // Proposed post-codec analog gates. Record-head DAC signals stay untouched.
+    let gates = u32::from(seq.gates) << 8;
+    write(0x58020018, gates | ((!gates & 0x300) << 16));
+    // Read-only host diagnostics at the control rate, not per audio frame.
+    if TICKS & 15 == 1 {
+        for (i, v) in [
+            u32::from(seq.running),
+            u32::from(seq.step),
+            u32::from(seq.cursor),
+            u32::from(seq.bpm),
+            u32::from(seq.masks[0]),
+            u32::from(seq.masks[1]),
+            u32::from(seq.target),
+            u32::from(seq.external),
+            seq.track as u32,
+            seq.overflow,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write(0x20000020 + i as u32 * 4, v);
+        }
+        for t in 0..2 {
+            for s in 0..16 {
+                write(
+                    0x20000060 + (t * 16 + s) as u32 * 4,
+                    u32::from(seq.notes[t][s]),
+                );
+            }
         }
     }
 }
@@ -90,13 +161,15 @@ pub unsafe extern "C" fn tape_main() -> ! {
     CONTROL = [Controller::new(), Controller::new()];
     TICKS = 0;
     GATES = [0; 2];
+    SEQ = sequencer::Sequencer::new();
+    CUE_HELD = false;
     write(0x20000000, 0);
     write(0x20000004, 0);
     write(0x580244e0, 7); // GPIO A/B/C clocks.
     write(0x58020018, 255 << 16);
-    write(0x58020000, (read(0x58020000) & !65535) | 0x5555);
-    write(0x58020400, read(0x58020400) & !(15 << 24));
-    write(0x58020800, read(0x58020800) & !(65535 << 8));
+    write(0x58020000, (read(0x58020000) & !0xfffff) | 0x55555);
+    write(0x58020400, read(0x58020400) & !(255 << 24));
+    write(0x58020800, read(0x58020800) & !(0x3ffff << 8));
     PREVIOUS = [buttons(0), buttons(1)]; // Held record at boot is not a new request.
     write(0x580244e8, (1 << 22) | 1); // I2C2 and TIM2.
     write(0x40000028, 63);
@@ -116,7 +189,9 @@ pub unsafe extern "C" fn tape_main() -> ! {
     ] {
         codec(reg, value);
     }
-    write(0x580244f0, 1 << 22);
+    write(0x580244f0, (1 << 22) | (1 << 4));
+    write(0x4001100c, 2048); // HSI64 / 2048 = MIDI 31,250 baud.
+    write(0x40011000, 13); // UE, RE, TE; poll without an extra IRQ.
     write(0x58024450, 4); // HSI64 -> MCLK16MHz -> 62500 frames/s.
     for channel in 0..2 {
         let base = 0x40015800 + channel * 32;
