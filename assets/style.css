@@ -63,6 +63,26 @@ details a { color:#cdb38f; }
 #engine-status { overflow-wrap:anywhere; }
 .cassette { position:absolute; left:47.5%; top:41%; width:39%; aspect-ratio:1576/998; transform:rotate(90deg); opacity:.88; filter:brightness(.78); pointer-events:none; }
 .cassette>img { display:block; width:100%; height:100%; }
+.cassette-left {left:14.5%;}
+.deck-choice {display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.deck-choice button {min-width:0;text-align:left;padding:7px 9px;}
+.deck-choice strong {display:block;font:600 12px/1.5 ui-monospace,monospace;}
+.deck-choice span {display:block;font:10px/1.6 ui-monospace,monospace;overflow-wrap:anywhere;}
+.deck-choice [aria-pressed="true"] {border-color:#d4aa72;background:#4a4133;color:#f0d9b6;}
+.both-transport {display:flex;gap:8px;margin-top:8px;}
+.both-transport button {flex:1;font-size:12px;padding:6px;}
+#selected-deck {margin:8px 0 0;color:#d5b991;}
+.sequencer-module {position:absolute;left:20.8%;top:68.2%;width:58.267%;aspect-ratio:150/24;filter:drop-shadow(0 4px 3px #0009);pointer-events:none;}
+.sequencer-module .led-face {display:block;width:100%;height:100%;}
+.sequencer-module .led-board {display:none;position:absolute;left:2%;top:12.5%;width:96%;height:75%;}
+.sequencer-module.pcb-view {outline:1px dashed #c9ad77;filter:none;background:#14191566;}
+.sequencer-module.pcb-view .led-face {visibility:hidden;}
+.sequencer-module.pcb-view .led-board {display:block;}
+.lid-harness {position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.85;}
+.fit-details {margin:12px 6% 0;font-size:13px;}
+.fit-details summary {font-size:12px;}
+.fit-details label {display:flex;gap:8px;align-items:center;color:#ddd;}
+.fit-drawing {display:block;width:100%;margin-top:12px;border-radius:3px;}
 .tape-duration { position:absolute; left:76%; top:70%; width:12%; color:#353126; text-align:center; font:bold clamp(7px,.9vw,11px)/1.1 ui-monospace,monospace; }
 .well-target { position:absolute; top:33%; width:27%; height:39%; padding:0; border:1px solid transparent; background:transparent; z-index:3; }
 .well-target.primary { left:52%; }
@@ -106,7 +126,7 @@ details a { color:#cdb38f; }
 .cassette-label b { font:bold clamp(11px,1.6vw,20px)/1.2 ui-monospace,monospace; }
 .reel-window { display:flex; justify-content:space-around; align-items:center; height:42%; margin:0 4%; background:#171d16; border:3px solid #c7bd9f; }
 .reel { position:absolute; top:45.5%; left:27.9%; width:5.5%; aspect-ratio:1; border-radius:50%; background:linear-gradient(90deg,transparent 38%,#b3ab8b 40%,#453d2e 52%,transparent 54%); opacity:.3; }
-#reel-right { left:67.1%; }
+#reel-right,.second-reel { left:67.1%; }
 .tape-line { height:60%; width:24%; border-top:2px solid #554d37; border-bottom:2px solid #554d37; }
 .cassette-bottom { font:clamp(5px,.6vw,8px)/1.5 ui-monospace,monospace; color:#b3b59f; padding:2% 5%; letter-spacing:1px; }
 @media(max-width:850px) {
@@ -117,7 +137,7 @@ details a { color:#cdb38f; }
   header { display:block; margin-bottom:14px; }
   header>span { display:block; margin-top:3px; }
   section { min-width:0; margin-top:15px; }
-  #power,.readout,.level-track,#device-note,#notice,details { grid-column:1/-1; }
+  #power,.readout,.level-track,#device-note,#notice,details,.deck-choice,.both-transport,#selected-deck { grid-column:1/-1; }
   #device-note { min-height:0; }
   .input-actions { flex-wrap:wrap; justify-content:flex-start; gap:15px; }
   .input-actions button { font-size:14px; }

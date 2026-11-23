@@ -55,12 +55,20 @@ async fn get_record(db: &IdbDatabase, key: JsValue) -> Result<JsValue, JsValue> 
     let req = tx.object_store("tapes")?.get(&key)?;
     request(&req).await
 }
-pub async fn load(db: &IdbDatabase) -> Result<Library, JsValue> {
-    let catalog = get_record(db, "catalog-frames".into()).await?;
+fn key(deck: usize, name: &str) -> JsValue {
+    if deck == 0 {
+        name.to_string()
+    } else {
+        format!("left-{name}")
+    }
+    .into()
+}
+pub async fn load(db: &IdbDatabase, deck: usize) -> Result<Library, JsValue> {
+    let catalog = get_record(db, key(deck, "catalog-frames")).await?;
     let mut tapes = Vec::new();
     if catalog.is_undefined() {
         // Do not delete the legacy keys: migration keeps a recoverable copy.
-        for seconds in [6u32, 8] {
+        for seconds in if deck == 0 { vec![6u32, 8] } else { vec![] } {
             let value = get_record(db, seconds.into()).await?;
             if value.is_instance_of::<Float32Array>() {
                 tapes.push((seconds * 62500, Float32Array::new(&value).to_vec()));
@@ -75,13 +83,13 @@ pub async fn load(db: &IdbDatabase) -> Result<Library, JsValue> {
         return Err(js_error("invalid saved tape catalog"));
     }
     for frames in js_sys::Uint32Array::new(&catalog).to_vec() {
-        let value = get_record(db, format!("frames-{frames}").into()).await?;
+        let value = get_record(db, key(deck, &format!("frames-{frames}"))).await?;
         if !value.is_instance_of::<Float32Array>() {
             return Err(js_error("saved cassette is missing"));
         }
         tapes.push((frames, Float32Array::new(&value).to_vec()));
     }
-    let selected = get_record(db, "inserted-frames".into())
+    let selected = get_record(db, key(deck, "inserted-frames"))
         .await?
         .as_f64()
         .map(|n| n as u32);
@@ -89,6 +97,7 @@ pub async fn load(db: &IdbDatabase) -> Result<Library, JsValue> {
 }
 pub async fn save(
     db: &IdbDatabase,
+    deck: usize,
     tapes: Vec<(u32, Vec<f32>)>,
     selected: u32,
 ) -> Result<(), JsValue> {
@@ -98,14 +107,14 @@ pub async fn save(
     for (frames, samples) in tapes {
         store.put_with_key(
             &Float32Array::from(samples.as_slice()),
-            &format!("frames-{frames}").into(),
+            &key(deck, &format!("frames-{frames}")),
         )?;
     }
     store.put_with_key(
         &js_sys::Uint32Array::from(catalog.as_slice()),
-        &"catalog-frames".into(),
+        &key(deck, "catalog-frames"),
     )?;
-    store.put_with_key(&selected.into(), &"inserted-frames".into())?;
+    store.put_with_key(&selected.into(), &key(deck, "inserted-frames"))?;
     let mut complete = None;
     let mut failure = None;
     let promise = js_sys::Promise::new(&mut |resolve, reject| {

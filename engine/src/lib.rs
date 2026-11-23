@@ -1,18 +1,38 @@
-//! Interactive physical carrier. Instrument decisions execute in the ARM ELF.
-use ansaloop_sim::tape::{Attachment, Cassette, Deck, Fault, FRAME_NS, RATE};
+//! Two physical carriers controlled by one actual dual-deck ARM firmware image.
+pub use ansaloop_sim::control::Command as Button;
+use ansaloop_sim::tape::{Cassette, Deck, Fault, FRAME_NS, RATE};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, collections::BTreeMap, io::Cursor, rc::Rc};
-use virtual_daisy::{board::Board, machine::Machine};
-
+use virtual_daisy::{
+    board::Board,
+    machine::{Carrier, Machine},
+};
 pub const FIRMWARE: &[u8] = include_bytes!("../../firmware/ansaloop.elf");
-pub const EXPECTED_SHA: &str = "3a2fe358b5a4359c5715a21813e96aa5a0f7e7e7a1745e7a9a96e2dd19d3f2e5";
+pub const EXPECTED_SHA: &str = "03f0fcd226c6406124c5cfc43690a3d5ea4b014ff87d52c9178a4b852895c497";
 pub type Result<T> = std::result::Result<T, String>;
-pub use ansaloop_sim::control::Command as Button;
-// Bound browser allocations, not musical durations. All positive, fractional
-// lengths that fit this aggregate 256 MiB media budget are accepted.
 pub const MAX_MEDIA_FRAMES: usize = 64 * 1024 * 1024;
 pub const MAX_SOURCE_FRAMES: usize = 32 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeckId {
+    Right,
+    Left,
+}
+impl DeckId {
+    pub const ALL: [Self; 2] = [Self::Right, Self::Left];
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Right => 0,
+            Self::Left => 1,
+        }
+    }
+    pub fn from_index(index: usize) -> Result<Self> {
+        Self::ALL
+            .get(index)
+            .copied()
+            .ok_or_else(|| "unknown deck".into())
+    }
+}
 pub struct Snapshot {
     pub state: &'static str,
     pub seconds: f64,
@@ -26,182 +46,82 @@ pub struct Snapshot {
     pub source_position: f64,
     pub source_duration: f64,
     pub eof: bool,
+    pub microphone: bool,
+    pub repeat: bool,
 }
-pub struct Engine {
-    machine: Machine,
+struct Tape {
     deck: Rc<RefCell<Deck>>,
     parked: BTreeMap<usize, Cassette>,
     selected: usize,
-    frame: u64,
     last_release: u64,
-    adc: f32,
-    output: f32,
-    previous_output: f32,
-    phase: f64,
-    last_mic: f32,
     source: Vec<f32>,
     source_hz: u32,
     source_position: f64,
     source_ended: bool,
-    pub microphone: bool,
-    pub repeat_source: bool,
-    pub dirty: bool,
+    microphone: bool,
+    repeat: bool,
 }
-impl Engine {
-    pub fn new() -> Result<Self> {
-        let hash = format!("{:x}", Sha256::digest(FIRMWARE));
-        if hash != EXPECTED_SHA {
-            return Err("firmware hash differs from verified ARM tape image".into());
-        }
-        let deck = Rc::new(RefCell::new(Deck::new(6, Fault::None)));
-        let mut machine =
-            Machine::from_elf_functional(Board::Rev5, FIRMWARE).map_err(|e| e.to_string())?;
-        machine.attach(Box::new(Attachment(deck.clone())));
-        Ok(Self {
-            machine,
-            deck,
-            parked: BTreeMap::from([((8 * RATE) as usize, Cassette::blank(8))]),
-            selected: (6 * RATE) as usize,
-            frame: 0,
+impl Tape {
+    fn new(seconds: u32) -> Self {
+        let other = if seconds == 6 { 8 } else { 6 };
+        Self {
+            deck: Rc::new(RefCell::new(Deck::new(seconds, Fault::None))),
+            parked: BTreeMap::from([((other * RATE) as usize, Cassette::blank(other))]),
+            selected: (seconds * RATE) as usize,
             last_release: 0,
-            adc: 0.,
-            output: 0.,
-            previous_output: 0.,
-            phase: 0.,
-            last_mic: 0.,
             source: vec![],
             source_hz: 48000,
             source_position: 0.,
             source_ended: false,
             microphone: false,
-            repeat_source: false,
-            dirty: false,
-        })
+            repeat: false,
+        }
     }
-    /// Queue real contact edges. No host controller tick or desired-state write.
-    pub fn press(&mut self, button: Button) {
-        let now = self.frame * FRAME_NS;
+    fn media_frames(&self) -> usize {
+        self.selected + self.parked.keys().sum::<usize>()
+    }
+    fn known(&self, frames: usize) -> bool {
+        self.selected == frames || self.parked.contains_key(&frames)
+    }
+    fn press(&mut self, button: Button, frame: u64) {
+        let now = frame * FRAME_NS;
         let start = (now + FRAME_NS).max(self.last_release + 4_000_000);
         self.last_release = start + 20_000_000;
-        let mut deck = self.deck.borrow_mut();
-        let keep = deck
-            .schedule
-            .iter()
-            .rposition(|(t, _)| *t <= now)
-            .unwrap_or(0);
-        deck.schedule.drain(..keep);
-        deck.schedule.push((start, Some(button)));
-        deck.schedule.push((self.last_release, None));
+        let mut d = self.deck.borrow_mut();
+        let keep = d.schedule.iter().rposition(|(t, _)| *t <= now).unwrap_or(0);
+        d.schedule.drain(..keep);
+        d.schedule.push((start, Some(button)));
+        d.schedule.push((self.last_release, None));
     }
-    pub fn load_source(&mut self, samples: Vec<f32>, hz: u32) -> Result<()> {
-        if !(8000..=192000).contains(&hz)
-            || samples.len() > MAX_SOURCE_FRAMES
-            || samples.iter().any(|v| !v.is_finite() || v.abs() > 1.)
-        {
-            return Err(
-                "audio must be finite, 8–192 kHz, and fit the browser's input-memory budget".into(),
-            );
+    fn input(&mut self, mic: f32, frame: u64) -> f32 {
+        if self.deck.borrow().outputs != 15 {
+            return self.deck.borrow().read();
         }
-        self.source = samples;
-        self.source_hz = hz;
-        self.source_position = 0.;
-        self.source_ended = false;
-        self.microphone = false;
-        Ok(())
-    }
-    pub fn rewind_source(&mut self) {
-        self.source_position = 0.;
-        self.source_ended = false;
-    }
-    fn file_sample(&mut self) -> f32 {
+        if self.microphone {
+            return mic;
+        }
         if self.source.is_empty() {
             return 0.;
         }
         if self.source_position >= self.source.len() as f64 {
-            if self.repeat_source {
+            if self.repeat {
                 self.source_position %= self.source.len() as f64;
             } else {
                 if !self.source_ended {
                     self.source_ended = true;
-                    self.press(Button::Stop);
+                    self.press(Button::Stop, frame);
                 }
                 return 0.;
             }
         }
-        let index = self.source_position as usize;
-        let a = self.source[index];
-        let b = self.source.get(index + 1).copied().unwrap_or(a);
-        let value = a + (b - a) * self.source_position.fract() as f32;
+        let at = self.source_position as usize;
+        let a = self.source[at];
+        let b = self.source.get(at + 1).copied().unwrap_or(a);
+        let sample = a + (b - a) * self.source_position.fract() as f32;
         self.source_position += f64::from(self.source_hz) / f64::from(RATE);
-        value
+        sample
     }
-    fn tick(&mut self, mic: f32) -> Result<f32> {
-        let gates = self.deck.borrow().outputs;
-        let input = if gates == 15 {
-            if self.microphone {
-                mic
-            } else {
-                self.file_sample()
-            }
-        } else {
-            self.deck.borrow().read()
-        };
-        // Declared one-frame ADC latch, matching the coupled coordinator.
-        if self.machine.queued_input_frames() == 0 {
-            self.machine
-                .input(&[[self.adc, self.adc]])
-                .map_err(|e| e.to_string())?;
-        }
-        self.adc = input;
-        self.frame += 1;
-        self.machine
-            .run_until(self.frame * FRAME_NS, 20_000)
-            .map_err(|e| e.to_string())?;
-        let audio = self.machine.take_audio();
-        if audio.len() > 1 {
-            return Err("codec produced multiple frames per exchange".into());
-        }
-        for sample in audio {
-            self.output = sample[0];
-            let mut deck = self.deck.borrow_mut();
-            let before = deck.written;
-            deck.advance(sample[0]);
-            self.dirty |= deck.written != before;
-        }
-        if self.machine.read32(0x20000004).map_err(|e| e.to_string())? != 0 {
-            return Err("ARM firmware exception".into());
-        }
-        Ok(self.output)
-    }
-    /// Browser packet boundaries never change the engine/audio resampling phase.
-    pub fn render(&mut self, mic: &[f32], device_hz: u32) -> Result<Vec<f32>> {
-        if !(8000..=192000).contains(&device_hz)
-            || mic.len() > 4096
-            || mic.iter().any(|v| !v.is_finite() || v.abs() > 1.)
-        {
-            return Err("invalid audio packet".into());
-        }
-        let ratio = f64::from(RATE) / f64::from(device_hz);
-        let mut out = Vec::with_capacity(mic.len());
-        for &sample in mic {
-            let old_phase = self.phase;
-            self.phase += ratio;
-            let count = self.phase.floor() as usize;
-            for n in 1..=count {
-                let fraction = ((n as f64 - old_phase) / ratio) as f32;
-                let input = self.last_mic + (sample - self.last_mic) * fraction;
-                self.previous_output = self.output;
-                self.tick(input.clamp(-1., 1.))?;
-            }
-            self.phase -= count as f64;
-            out.push(
-                self.previous_output + (self.output - self.previous_output) * self.phase as f32,
-            );
-            self.last_mic = sample;
-        }
-        Ok(out)
-    }
-    pub fn snapshot(&self) -> Snapshot {
+    fn snapshot(&self, frame: u64) -> Snapshot {
         let d = self.deck.borrow();
         Snapshot {
             state: match d.outputs {
@@ -216,52 +136,272 @@ impl Engine {
             position: d.media.as_ref().unwrap().position / f64::from(RATE),
             speed: d.speed,
             gpio: d.outputs,
-            frames: self.frame,
+            frames: frame,
             written: d.written,
-            can_swap: d.outputs == 0
-                && d.speed < 0.001
-                && self.frame * FRAME_NS >= self.last_release,
+            can_swap: d.outputs == 0 && d.speed < 0.001 && frame * FRAME_NS >= self.last_release,
             source_position: self.source_position.min(self.source.len() as f64)
                 / f64::from(self.source_hz),
             source_duration: self.source.len() as f64 / f64::from(self.source_hz),
             eof: !self.source.is_empty()
                 && self.source_position >= self.source.len() as f64
-                && !self.repeat_source,
+                && !self.repeat,
+            microphone: self.microphone,
+            repeat: self.repeat,
+        }
+    }
+}
+struct DualAttachment([Rc<RefCell<Deck>>; 2]);
+impl Carrier for DualAttachment {
+    fn pins(&mut self, outputs: &[u16; 11], now: u64) -> [(u16, u16); 11] {
+        let mut pins = [(0, 0); 11];
+        for (i, cell) in self.0.iter().enumerate() {
+            let mut d = cell.borrow_mut();
+            let gates = (outputs[0] >> (4 * i)) & 15;
+            if d.outputs != gates {
+                d.trace.push((now, gates));
+                d.outputs = gates;
+            }
+            d.now = now;
+            let command = d
+                .schedule
+                .iter()
+                .rev()
+                .find(|(at, _)| *at <= now)
+                .and_then(|(_, c)| *c);
+            let (media, ready, play, record, stop) = if i == 0 {
+                (8, 9, 10, 11, 12)
+            } else {
+                (6, 7, 4, 5, 13)
+            };
+            pins[1].0 |= 1 << stop;
+            pins[1].1 |= u16::from(command == Some(Button::Stop)) << stop;
+            pins[2].0 |= (1 << media) | (1 << ready) | (1 << play) | (1 << record);
+            pins[2].1 |= (u16::from(d.media.is_some()) << media)
+                | (u16::from(d.ready()) << ready)
+                | (u16::from(command == Some(Button::Play)) << play)
+                | (u16::from(command == Some(Button::Record)) << record);
+        }
+        pins
+    }
+    fn next_event(&self) -> Option<u64> {
+        self.0
+            .iter()
+            .filter_map(|cell| {
+                let d = cell.borrow();
+                d.schedule
+                    .iter()
+                    .find(|(at, _)| *at > d.now)
+                    .map(|(at, _)| *at)
+            })
+            .min()
+    }
+}
+pub struct Engine {
+    machine: Machine,
+    tapes: [Tape; 2],
+    frame: u64,
+    adc: [f32; 2],
+    output: [f32; 2],
+    previous_output: [f32; 2],
+    phase: f64,
+    last_mic: f32,
+    // Compatibility aliases for the original right-deck API.
+    pub microphone: bool,
+    pub repeat_source: bool,
+    pub dirty: bool,
+    pub dirty_decks: [bool; 2],
+}
+impl Engine {
+    pub fn new() -> Result<Self> {
+        if format!("{:x}", Sha256::digest(FIRMWARE)) != EXPECTED_SHA {
+            return Err("firmware hash differs from verified dual-deck ARM image".into());
+        }
+        let tapes = [Tape::new(6), Tape::new(8)];
+        let mut machine =
+            Machine::from_elf_functional(Board::Rev5, FIRMWARE).map_err(|e| e.to_string())?;
+        machine.attach(Box::new(DualAttachment([
+            tapes[0].deck.clone(),
+            tapes[1].deck.clone(),
+        ])));
+        Ok(Self {
+            machine,
+            tapes,
+            frame: 0,
+            adc: [0.; 2],
+            output: [0.; 2],
+            previous_output: [0.; 2],
+            phase: 0.,
+            last_mic: 0.,
+            microphone: false,
+            repeat_source: false,
+            dirty: false,
+            dirty_decks: [false; 2],
+        })
+    }
+    pub fn press(&mut self, button: Button) {
+        self.press_deck(DeckId::Right, button);
+    }
+    pub fn press_deck(&mut self, id: DeckId, button: Button) {
+        self.tapes[id.index()].press(button, self.frame);
+    }
+    pub fn set_microphone(&mut self, id: DeckId, enabled: bool) {
+        self.tapes[id.index()].microphone = enabled;
+        if id == DeckId::Right {
+            self.microphone = enabled;
+        }
+    }
+    pub fn set_repeat(&mut self, id: DeckId, enabled: bool) {
+        self.tapes[id.index()].repeat = enabled;
+        if id == DeckId::Right {
+            self.repeat_source = enabled;
+        }
+    }
+    pub fn load_source(&mut self, samples: Vec<f32>, hz: u32) -> Result<()> {
+        self.load_source_deck(DeckId::Right, samples, hz)
+    }
+    pub fn load_source_deck(&mut self, id: DeckId, samples: Vec<f32>, hz: u32) -> Result<()> {
+        let other = 1 - id.index();
+        if !(8000..=192000).contains(&hz)
+            || samples.len() + self.tapes[other].source.len() > MAX_SOURCE_FRAMES
+            || samples.iter().any(|v| !v.is_finite() || v.abs() > 1.)
+        {
+            return Err(
+                "audio must be finite, 8–192 kHz, and fit the shared input-memory budget".into(),
+            );
+        }
+        let t = &mut self.tapes[id.index()];
+        t.source = samples;
+        t.source_hz = hz;
+        t.source_position = 0.;
+        t.source_ended = false;
+        self.set_microphone(id, false);
+        Ok(())
+    }
+    pub fn rewind_source(&mut self) {
+        self.rewind_source_deck(DeckId::Right);
+    }
+    pub fn rewind_source_deck(&mut self, id: DeckId) {
+        let t = &mut self.tapes[id.index()];
+        t.source_position = 0.;
+        t.source_ended = false;
+    }
+    fn tick(&mut self, mic: f32) -> Result<[f32; 2]> {
+        let input = [
+            self.tapes[0].input(mic, self.frame),
+            self.tapes[1].input(mic, self.frame),
+        ];
+        if self.machine.queued_input_frames() == 0 {
+            self.machine.input(&[self.adc]).map_err(|e| e.to_string())?;
+        }
+        self.adc = input;
+        self.frame += 1;
+        self.machine
+            .run_until(self.frame * FRAME_NS, 20_000)
+            .map_err(|e| e.to_string())?;
+        let audio = self.machine.take_audio();
+        if audio.len() > 1 {
+            return Err("codec produced multiple frames per exchange".into());
+        }
+        for sample in audio {
+            self.output = sample;
+            for (id, value) in sample.into_iter().enumerate() {
+                let mut d = self.tapes[id].deck.borrow_mut();
+                let before = d.written;
+                d.advance(value);
+                self.dirty_decks[id] |= d.written != before;
+                self.dirty |= d.written != before;
+            }
+        }
+        if self.machine.read32(0x20000004).map_err(|e| e.to_string())? != 0 {
+            return Err("ARM firmware exception".into());
+        }
+        Ok(self.output)
+    }
+    /// Two codec channels: right deck on channel 0, left deck on channel 1.
+    pub fn render_tracks(&mut self, mic: &[f32], device_hz: u32) -> Result<Vec<[f32; 2]>> {
+        if !(8000..=192000).contains(&device_hz)
+            || mic.len() > 4096
+            || mic.iter().any(|v| !v.is_finite() || v.abs() > 1.)
+        {
+            return Err("invalid audio packet".into());
+        }
+        self.tapes[0].microphone = self.microphone;
+        self.tapes[0].repeat = self.repeat_source;
+        let ratio = f64::from(RATE) / f64::from(device_hz);
+        let mut out = Vec::with_capacity(mic.len());
+        for &sample in mic {
+            let old = self.phase;
+            self.phase += ratio;
+            let count = self.phase.floor() as usize;
+            for n in 1..=count {
+                let fraction = ((n as f64 - old) / ratio) as f32;
+                let input = self.last_mic + (sample - self.last_mic) * fraction;
+                self.previous_output = self.output;
+                self.tick(input.clamp(-1., 1.))?;
+            }
+            self.phase -= count as f64;
+            out.push(std::array::from_fn(|i| {
+                self.previous_output[i]
+                    + (self.output[i] - self.previous_output[i]) * self.phase as f32
+            }));
+            self.last_mic = sample;
+        }
+        Ok(out)
+    }
+    /// Original single-deck API returns the right deck. Both transports advance;
+    /// the browser mixes the two channels returned by render_tracks instead.
+    pub fn render(&mut self, mic: &[f32], hz: u32) -> Result<Vec<f32>> {
+        Ok(self
+            .render_tracks(mic, hz)?
+            .into_iter()
+            .map(|v| v[0])
+            .collect())
+    }
+    pub fn snapshot(&self) -> Snapshot {
+        self.snapshot_deck(DeckId::Right)
+    }
+    pub fn snapshot_deck(&self, id: DeckId) -> Snapshot {
+        self.tapes[id.index()].snapshot(self.frame)
+    }
+    fn frames(seconds: f64) -> Result<usize> {
+        let n = (seconds * f64::from(RATE)).round();
+        if !seconds.is_finite() || seconds <= 0. || n < 1. {
+            return Err("enter a positive tape length in seconds".into());
+        }
+        if n > MAX_MEDIA_FRAMES as f64 {
+            return Err("tape exceeds the browser's media-memory budget".into());
+        }
+        Ok(n as usize)
+    }
+    fn check_budget(&self, id: DeckId, frames: usize) -> Result<()> {
+        let added = if self.tapes[id.index()].known(frames) {
+            0
+        } else {
+            frames
+        };
+        if self.tapes.iter().map(Tape::media_frames).sum::<usize>() + added > MAX_MEDIA_FRAMES {
+            Err("both tape libraries exceed the shared 256 MiB media-memory budget".into())
+        } else {
+            Ok(())
         }
     }
     pub fn swap(&mut self, seconds: u32) -> Result<()> {
         self.insert_tape(f64::from(seconds))
     }
-    fn frames(seconds: f64) -> Result<usize> {
-        let count = (seconds * f64::from(RATE)).round();
-        if !seconds.is_finite() || seconds <= 0. || count < 1. {
-            return Err("enter a positive tape length in seconds".into());
-        }
-        if count > MAX_MEDIA_FRAMES as f64 {
-            return Err("tape exceeds the browser's media-memory budget".into());
-        }
-        Ok(count as usize)
-    }
-    fn check_budget(&self, frames: usize) -> Result<()> {
-        let known = self.selected == frames || self.parked.contains_key(&frames);
-        let total =
-            self.selected + self.parked.keys().sum::<usize>() + if known { 0 } else { frames };
-        if total > MAX_MEDIA_FRAMES {
-            Err("the tape library exceeds the browser's 256 MiB media-memory budget".into())
-        } else {
-            Ok(())
-        }
-    }
     pub fn insert_tape(&mut self, seconds: f64) -> Result<()> {
-        if !self.snapshot().can_swap {
-            return Err("press Stop and wait for the tape to settle before swapping".into());
+        self.insert_tape_deck(DeckId::Right, seconds)
+    }
+    pub fn insert_tape_deck(&mut self, id: DeckId, seconds: f64) -> Result<()> {
+        if !self.snapshot_deck(id).can_swap {
+            return Err("press Stop and wait for this deck to settle before swapping".into());
         }
         let frames = Self::frames(seconds)?;
-        if frames == self.selected {
+        if frames == self.tapes[id.index()].selected {
             return Ok(());
         }
-        self.check_budget(frames)?;
-        let media = if let Some(media) = self.parked.remove(&frames) {
+        self.check_budget(id, frames)?;
+        let t = &mut self.tapes[id.index()];
+        let media = if let Some(media) = t.parked.remove(&frames) {
             media
         } else {
             let mut samples = Vec::new();
@@ -275,15 +415,17 @@ impl Engine {
                 wraps: 0,
             }
         };
-        match self.deck.borrow_mut().replace(media) {
+        let result = t.deck.borrow_mut().replace(media);
+        match result {
             Ok(old) => {
-                self.parked.insert(self.selected, old);
-                self.selected = frames;
+                t.parked.insert(t.selected, old);
+                t.selected = frames;
                 self.dirty = true;
+                self.dirty_decks[id.index()] = true;
                 Ok(())
             }
             Err((reason, media)) => {
-                self.parked.insert(frames, media);
+                t.parked.insert(frames, media);
                 Err(reason.into())
             }
         }
@@ -292,60 +434,73 @@ impl Engine {
         self.tape_frames(Self::frames(f64::from(seconds))? as u32)
     }
     pub fn tape_frames(&self, frames: u32) -> Result<Vec<f32>> {
-        let frames = frames as usize;
-        Ok(if self.selected == frames {
-            self.deck.borrow().media.as_ref().unwrap().samples.clone()
+        self.tape_frames_deck(DeckId::Right, frames)
+    }
+    pub fn tape_frames_deck(&self, id: DeckId, frames: u32) -> Result<Vec<f32>> {
+        let t = &self.tapes[id.index()];
+        let n = frames as usize;
+        Ok(if n == t.selected {
+            t.deck.borrow().media.as_ref().unwrap().samples.clone()
         } else {
-            self.parked
-                .get(&frames)
-                .ok_or("unknown cassette")?
-                .samples
-                .clone()
+            t.parked.get(&n).ok_or("unknown cassette")?.samples.clone()
         })
     }
     pub fn catalog(&self) -> Vec<f64> {
-        let mut frames = self
+        self.catalog_deck(DeckId::Right)
+    }
+    pub fn catalog_deck(&self, id: DeckId) -> Vec<f64> {
+        let t = &self.tapes[id.index()];
+        let mut n = t
             .parked
             .keys()
             .copied()
-            .chain(std::iter::once(self.selected))
+            .chain(std::iter::once(t.selected))
             .collect::<Vec<_>>();
-        frames.sort_unstable();
-        frames
-            .into_iter()
-            .map(|f| f as f64 / f64::from(RATE))
-            .collect()
+        n.sort_unstable();
+        n.into_iter().map(|f| f as f64 / f64::from(RATE)).collect()
     }
     pub fn tapes(&self) -> Vec<(u32, Vec<f32>)> {
-        self.parked
+        self.tapes_deck(DeckId::Right)
+    }
+    pub fn tapes_deck(&self, id: DeckId) -> Vec<(u32, Vec<f32>)> {
+        let t = &self.tapes[id.index()];
+        t.parked
             .iter()
-            .map(|(&frames, t)| (frames as u32, t.samples.clone()))
+            .map(|(&n, c)| (n as u32, c.samples.clone()))
             .chain(std::iter::once((
-                self.selected as u32,
-                self.deck.borrow().media.as_ref().unwrap().samples.clone(),
+                t.selected as u32,
+                t.deck.borrow().media.as_ref().unwrap().samples.clone(),
             )))
             .collect()
     }
     pub fn restore(&mut self, seconds: u32, samples: Vec<f32>) -> Result<()> {
-        let frames = Self::frames(f64::from(seconds))? as u32;
-        self.restore_frames(frames, samples)
+        self.restore_frames(Self::frames(f64::from(seconds))? as u32, samples)
     }
     pub fn restore_frames(&mut self, frames: u32, samples: Vec<f32>) -> Result<()> {
-        let frames = frames as usize;
-        if !self.snapshot().can_swap
-            || frames == 0
-            || frames > MAX_MEDIA_FRAMES
-            || samples.len() != frames
+        self.restore_frames_deck(DeckId::Right, frames, samples)
+    }
+    pub fn restore_frames_deck(
+        &mut self,
+        id: DeckId,
+        frames: u32,
+        samples: Vec<f32>,
+    ) -> Result<()> {
+        let n = frames as usize;
+        if !self.snapshot_deck(id).can_swap
+            || n == 0
+            || n > MAX_MEDIA_FRAMES
+            || samples.len() != n
             || samples.iter().any(|v| !v.is_finite() || v.abs() > 1.)
         {
             return Err("invalid saved cassette".into());
         }
-        self.check_budget(frames)?;
-        if frames == self.selected {
-            self.deck.borrow_mut().media.as_mut().unwrap().samples = samples;
+        self.check_budget(id, n)?;
+        let t = &mut self.tapes[id.index()];
+        if n == t.selected {
+            t.deck.borrow_mut().media.as_mut().unwrap().samples = samples;
         } else {
-            self.parked.insert(
-                frames,
+            t.parked.insert(
+                n,
                 Cassette {
                     samples,
                     position: 0.,
@@ -356,9 +511,13 @@ impl Engine {
         Ok(())
     }
     pub fn export_wav(&self) -> Result<Vec<u8>> {
+        self.export_wav_deck(DeckId::Right)
+    }
+    pub fn export_wav_deck(&self, id: DeckId) -> Result<Vec<u8>> {
+        let t = &self.tapes[id.index()];
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(44 + self.selected * 2)
+            .try_reserve_exact(44 + t.selected * 2)
             .map_err(|_| "not enough browser memory to export this tape")?;
         let mut cursor = Cursor::new(bytes);
         let mut writer = hound::WavWriter::new(
@@ -371,7 +530,7 @@ impl Engine {
             },
         )
         .map_err(|e| e.to_string())?;
-        for value in &self.deck.borrow().media.as_ref().unwrap().samples {
+        for value in &t.deck.borrow().media.as_ref().unwrap().samples {
             writer
                 .write_sample((*value * 32767.) as i16)
                 .map_err(|e| e.to_string())?;
